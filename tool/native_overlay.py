@@ -1321,6 +1321,39 @@ class TransparentOverlay(QWidget):
             self.cy + cross_size,
         )
 
+        if result is not None:
+            crosshair_data = result.get("modules", {}).get("crosshair", {})
+            
+            # 1. 绘制调参用的 ROI 搜索框 (亮紫色虚线)
+            roi_rect = crosshair_data.get("roi_rect")
+            if roi_rect is not None:
+                rx, ry, rw, rh = roi_rect
+                painter.setPen(QPen(QColor(255, 0, 255, 220), 1, Qt.DashLine))
+                painter.setBrush(QBrush(QColor(255, 0, 255, 30)))
+                painter.drawRect(rx, ry, rw, rh)
+                
+                painter.setFont(QFont("Consolas", 8, QFont.Bold))
+                painter.setPen(QColor(255, 100, 255))
+                painter.drawText(rx, ry - 3, "Crosshair ROI")
+
+            # 2. 绘制计算出的标准刻度映射点
+            if crosshair_data.get("valid"):
+                painter.setPen(QPen(QColor(0, 255, 127, 255), 2))
+                painter.setBrush(QBrush(QColor(0, 255, 127, 255)))
+                
+                all_ticks = crosshair_data.get("all_ticks", [])
+                for (tx, ty) in all_ticks:
+                    # 在每一个推算出的刻度位置画一个小实心圆
+                    painter.drawEllipse(QPointF(tx, ty), 2, 2)
+                    # 向上画一根短竖线，形成准星的样子
+                    painter.drawLine(tx, ty, tx, ty - 6)
+
+                # 将测得的间距显示在中心十字旁边
+                spacing = crosshair_data.get("spacing", 0.0)
+                painter.setFont(QFont("Consolas", 9, QFont.Bold))
+                painter.setPen(QColor(0, 255, 127))
+                painter.drawText(self.cx + 20, self.cy + 15, f"Spacing: {spacing:.1f}px")
+                
         # =====================================================
         # Target
         # =====================================================

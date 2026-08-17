@@ -62,6 +62,24 @@ RED_HSV_MAX_2 = (180, 255, 255)
 GREY_HSV_MIN = (0, 0, 60)
 GREY_HSV_MAX = (180, 45, 185)
 
+# ============================================================
+# 2.5 舰种标志 (Center Icon) HSV
+#
+# 用于双重校验目标圆心处确实存在红/橙色的舰种图标。
+# 战舰的图标偏橙红色，因此 H 的上限稍微放宽到 15。
+#
+# ICON_PATCH_SIZE: 检查框的大小 (12x12)
+# ICON_RED_THRESHOLD: 红色像素占比阈值。设为 25% 以完美兼容巡洋舰中间的透明缺口。
+# ============================================================
+
+ICON_RED_LOWER_1 = (0, 150, 150)
+ICON_RED_UPPER_1 = (15, 255, 255)
+
+ICON_RED_LOWER_2 = (170, 150, 150)
+ICON_RED_UPPER_2 = (180, 255, 255)
+
+ICON_PATCH_SIZE = 12
+ICON_RED_THRESHOLD = 0.25
 
 # ============================================================
 # 3. 血条 → 目标圆心偏移
@@ -306,29 +324,29 @@ UI_EXCLUSION_REGIONS = [
         "name": "left_team_panel",
         "rect": (
             0,
-            0,
-            50,
-            50,
+            250,
+            300,
+            550,
         ),
     },
 
     {
         "name": "right_team_panel",
         "rect": (
-            0,
-            0,
-            50,
-            50,
+            2257,
+            250,
+            300,
+            550,
         ),
     },
 
     {
         "name": "top_score",
         "rect": (
+            700,
             0,
-            0,
-            0,
-            0,
+            1150,
+            200,
         ),
     },
 
@@ -355,10 +373,10 @@ UI_EXCLUSION_REGIONS = [
     {
         "name": "right_minimap",
         "rect": (
-            0,
-            0,
-            0,
-            0,
+            1860,
+            900,
+            700,
+            700,
         ),
     },
 
@@ -422,6 +440,17 @@ class IndicatorParser:
             RED_UPPER_2,
             dtype=np.uint8,
         )
+
+        # =====================================================
+        # 舰种标志
+        # =====================================================
+        self.icon_red_lower1 = np.array(ICON_RED_LOWER_1, dtype=np.uint8)
+        self.icon_red_upper1 = np.array(ICON_RED_UPPER_1, dtype=np.uint8)
+        self.icon_red_lower2 = np.array(ICON_RED_LOWER_2, dtype=np.uint8)
+        self.icon_red_upper2 = np.array(ICON_RED_UPPER_2, dtype=np.uint8)
+        
+        self.ICON_PATCH_SIZE = ICON_PATCH_SIZE
+        self.ICON_RED_THRESHOLD = ICON_RED_THRESHOLD
 
         # =====================================================
         # 状态灯
@@ -810,6 +839,41 @@ class IndicatorParser:
         return False
 
     # =========================================================
+    # 舰种标志校验
+    # =========================================================
+    def evaluate_center_icon(
+        self,
+        frame_hsv: np.ndarray,
+        cx: int,
+        cy: int,
+    ) -> bool:
+        h, w = frame_hsv.shape[:2]
+        r = self.ICON_PATCH_SIZE // 2
+
+        y1 = max(0, cy - r)
+        y2 = min(h, cy + r)
+        x1 = max(0, cx - r)
+        x2 = min(w, cx + r)
+
+        patch = frame_hsv[y1:y2, x1:x2]
+
+        if patch.size == 0:
+            return False
+
+        # 提取橙红色
+        mask1 = cv2.inRange(patch, self.icon_red_lower1, self.icon_red_upper1)
+        mask2 = cv2.inRange(patch, self.icon_red_lower2, self.icon_red_upper2)
+        red_mask = cv2.bitwise_or(mask1, mask2)
+
+        total_pixels = patch.shape[0] * patch.shape[1]
+        if total_pixels == 0:
+            return False
+
+        # 只要红色像素占比达标，就认为是合法图标
+        ratio = cv2.countNonZero(red_mask) / total_pixels
+        return ratio >= self.ICON_RED_THRESHOLD
+
+    # =========================================================
     # 搜索血条
     # =========================================================
 
@@ -895,7 +959,7 @@ class IndicatorParser:
                 )
             )
 
-            if w < 15:
+            if w < 4:
                 continue
 
             if h < 2 or h > 8:
@@ -941,12 +1005,10 @@ class IndicatorParser:
             if cx < 0 or cx >= width:
                 continue
 
-            if not self.evaluate_light_patch(
-                frame_hsv,
-                cx,
-                light_y,
-            ):
+            if not self.evaluate_light_patch(frame_hsv, cx, light_y):
+                continue
 
+            if not self.evaluate_center_icon(frame_hsv, cx, cy):
                 continue
 
             return (

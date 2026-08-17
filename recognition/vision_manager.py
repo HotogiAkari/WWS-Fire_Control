@@ -104,31 +104,125 @@ TARGET_SWITCH_DISTANCE = 180.0
 
 OCR_CONFIG = {
 
-    # 数字放大倍率
-    "numeric_scale": 2.0,
+    # ========================================================
+    # 基础放大
+    # ========================================================
 
-    # 小号普通文字
-    "normal_scale_small": 2.0,
+    "numeric_scale":
+        2.0,
 
-    # 大号普通文字
-    "normal_scale_large": 1.5,
+    "normal_scale_small":
+        2.0,
 
-    # 判断普通文字大小的 ROI 高度阈值
-    "normal_text_height_threshold": 30,
+    "normal_scale_large":
+        1.5,
 
-    # 最低亮度
-    "binary_min_value": 150,
+    "normal_text_height_threshold":
+        30,
 
-    # 最大允许饱和度
-    "binary_max_saturation": 80,
+    # ========================================================
+    # HSV
+    # ========================================================
 
-    # OCR 输入边框
-    "border_top": 8,
-    "border_bottom": 8,
-    "border_left": 12,
-    "border_right": 12,
+    "binary_max_saturation":
+        100,
+
+    # ========================================================
+    # 局部背景
+    # ========================================================
+
+    "background_blur_kernel":
+        (15, 15),
+
+    # ========================================================
+    # Top-Hat
+    # ========================================================
+
+    "tophat_kernel": (15, 15),
+
+    "tophat_gain": 2.0,
+
+    "tophat_post_blur_kernel": (3, 3),
+
+    # ========================================================
+    # Adaptive Threshold
+    # ========================================================
+
+    "adaptive_block_size": 11,
+
+    "adaptive_c": -15,
+
+    # ========================================================
+    # 去噪
+    # ========================================================
+
+    "noise_open_kernel": (2, 2),
+
+    "noise_open_iterations": 1,
+
+    "post_morph_kernel": (2, 2),
+
+    "post_morph_close_iterations": 1,
+
+    "min_foreground_component_area": 15,
+
+    # ========================================================
+    # 相对角度圆环
+    #
+    # ⭐ 后续主要调这里
+    # ========================================================
+
+    "angle_ring_center_x":
+        18.0,
+
+    "angle_ring_center_y":
+        18.0,
+
+    "angle_ring_radius":
+        13.0,
+
+    "angle_ring_thickness":
+        3.0,
+
+    "angle_ring_mask_dilate":
+        0,
+
+    # ========================================================
+    # Border
+    # ========================================================
+
+    "border_top":
+        8,
+
+    "border_bottom":
+        8,
+
+    "border_left":
+        12,
+
+    "border_right":
+        12,
 }
 
+CROSSHAIR_CONFIG = {
+    
+    # 截图ROI：(x偏移, y偏移, 宽, 高)
+    # 示例：从中心向右偏40像素开始搜索，宽度400，向上偏移12，高度8。
+    "roi": (40, -10, 800, 10),
+    
+    # 亮度阈值(0-255)。刻度中心是纯白色，调高一点能无视深色背景
+    "white_thresh": 240,
+    
+    # 垂直特征提取内核高度。必须小于roi的高度，但大于噪点高度
+    "vertical_kernel_h": 4,
+    
+    # 刻度最大允许粗细(像素)
+    "tick_max_width": 5,
+    
+    # 刻度间距的合理范围，用于过滤杂波
+    "min_spacing": 20,
+    "max_spacing": 400,
+}
 
 # ============================================================
 # Imports
@@ -140,7 +234,7 @@ from common.data_models import TargetState
 from recognition.capture import ScreenCapturer
 from recognition.indicator_parser import IndicatorParser
 from recognition.ocr_parser import OCRParser
-
+from recognition.crosshair_parser import CrosshairParser
 
 # ============================================================
 # VisionManager
@@ -200,6 +294,11 @@ class VisionManager:
             str,
             Any,
         ] = {}
+
+        self.register_module(
+            "crosshair",
+            CrosshairParser(**CROSSHAIR_CONFIG),
+        )
 
         # =====================================================
         # Screen

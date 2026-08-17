@@ -17,91 +17,296 @@ import numpy as np
 # ============================================================
 # OCR 调参区
 #
-# VisionManager 可以通过 OCR_CONFIG 覆盖这些默认值。
-# ============================================================
-
-
-# ============================================================
-# 1. 数字放大倍率
+# 所有 OCR 图像处理参数集中在这里。
 #
-# 所有数字字段统一使用。
+# VisionManager 可以通过 OCR_CONFIG 覆盖这些默认参数。
+# ============================================================
+
+
+# ============================================================
+# 1. 字体放大
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 数字字段放大倍率
 #
 # 调大：
 #     小数字更容易识别
-#     OCR 输入图像更大
+#     OCR 输入尺寸增加
 #     CPU 开销增加
 #
 # 调小：
 #     更快
-#     但小字体可能识别困难
-# ============================================================
+#     但小数字可能更难识别
+# ------------------------------------------------------------
 
 NUMERIC_SCALE = 2.0
 
 
-# ============================================================
-# 2. 普通文字放大倍率
+# ------------------------------------------------------------
+# 普通文字放大倍率
 #
-# 舰名使用。
-# ============================================================
+# 舰名等字段使用。
+# ------------------------------------------------------------
 
 NORMAL_SCALE_SMALL = 2.0
 NORMAL_SCALE_LARGE = 1.5
 
-# ROI 高度达到该值后使用 LARGE。
+# ROI 原始高度达到该值后使用 LARGE。
 NORMAL_TEXT_HEIGHT_THRESHOLD = 30
 
 
 # ============================================================
-# 3. 白 / 灰文字 HSV 筛选
+# 2. HSV 彩色抑制
 #
-#     V >= BINARY_MIN_VALUE
-#     S <= BINARY_MAX_SATURATION
+# 这里只作为辅助。
 #
-# 白色 / 灰色：
-#     S 通常较低
+# 白色 / 灰色文字：
+#     饱和度通常较低
 #
-# 黄色 / 蓝色 / 红色：
-#     S 通常较高
+# 黄色 / 蓝色 / 红色背景：
+#     饱和度通常较高
+#
+# 不要设置过低，否则可能损失浅黄色 / 灰白色文字。
 # ============================================================
 
-BINARY_MIN_VALUE = 150
-BINARY_MAX_SATURATION = 80
-
-
-# ============================================================
-# 4. 舰名形态学 CLOSE
-#
-# 数字不做 CLOSE。
-# 普通文字使用轻度 CLOSE。
-# ============================================================
-
-NORMAL_CLOSE_KERNEL = (2, 2)
+BINARY_MAX_SATURATION = 100
 
 
 # ============================================================
-# 5. OCR 输入边框
+# 3. 局部背景估计
+#
+# 用 Gaussian Blur 估计局部背景。
+#
+# 背景通常变化较慢，
+# 文字是不透明的局部高亮结构。
+# ============================================================
+
+BACKGROUND_BLUR_KERNEL = (15, 15)
+
+
+# ============================================================
+# 4. Top-Hat
+#
+# Top-Hat =
+#
+#     原图 - Opening(原图)
+#
+# 用于提取局部亮结构。
+#
+# 建议尝试：
+#
+#     11 × 11
+#     15 × 15
+#     21 × 21
+# ============================================================
+
+TOPHAT_KERNEL = (15, 15)
+
+
+# ============================================================
+# 5. Top-Hat 增益
+#
+# 调大：
+#     弱文字更加明显
+#
+# 调太大：
+#     背景噪声也会被增强
+# ============================================================
+
+TOPHAT_GAIN = 4.0
+
+
+# ============================================================
+# 6. Top-Hat 后平滑
+#
+# 用于去除单像素噪声。
+# ============================================================
+
+TOPHAT_POST_BLUR_KERNEL = (3, 3)
+
+
+# ============================================================
+# 7. Adaptive Threshold
+#
+# block size 必须是奇数。
+#
+# 调大：
+#     对大范围亮度变化更稳定
+#
+# 调小：
+#     对细节更敏感
+#
+# C 调大：
+#     更严格
+#
+# C 调小：
+#     更容易保留弱文字
+# ============================================================
+
+ADAPTIVE_BLOCK_SIZE = 11
+
+ADAPTIVE_C = -2
+
+
+# ============================================================
+# 8. 二值图去噪
+#
+# Opening：
+#
+#     去除孤立小噪点。
+#
+# Closing：
+#
+#     修复文字细小断裂。
+#
+# 不建议使用大核，
+# 防止数字笔画变粗或字符粘连。
+# ============================================================
+
+
+# ------------------------------------------------------------
+# Opening
+# ------------------------------------------------------------
+
+NOISE_OPEN_KERNEL = (2, 2)
+
+NOISE_OPEN_ITERATIONS = 1
+
+
+# ------------------------------------------------------------
+# Closing
+# ------------------------------------------------------------
+
+POST_MORPH_KERNEL = (2, 2)
+
+POST_MORPH_CLOSE_ITERATIONS = 1
+
+
+# ============================================================
+# 9. 小连通区域过滤
+#
+# 二值化后把非常小的前景区域删除。
+#
+# 例如：
+#
+#     零散 1~2 像素噪点
+#
+# 但不要设置太大，
+# 否则小数字笔画会被一起删掉。
+# ============================================================
+
+MIN_FOREGROUND_COMPONENT_AREA = 3
+
+
+# ============================================================
+# 10. 相对角度圆环 Mask
+#
+# ⭐⭐⭐ 这里是你之后主要调节的位置。
+#
+# 角度 ROI 默认：
+#
+#     36 × 36
+#
+# 圆环中心默认位于 ROI 中心附近。
+#
+# 如果圆环还残留：
+#
+#     增大 ANGLE_RING_RADIUS
+#
+# 如果数字被圆环 Mask 误删：
+#
+#     减小 ANGLE_RING_RADIUS
+#
+# ------------------------------------------------------------
+#
+# ANGLE_RING_CENTER_X / Y
+#
+#     圆环中心相对于角度 ROI 左上角的位置。
+#
+# 当前默认：
+#
+#     18, 18
+#
+# ------------------------------------------------------------
+#
+# ANGLE_RING_RADIUS
+#
+#     ⭐ 圆环半径
+#
+# ------------------------------------------------------------
+#
+# ANGLE_RING_THICKNESS
+#
+#     圆环需要清除的厚度。
+#
+# 调大：
+#     可以更彻底地删除圆环
+#
+# 调太大：
+#     可能碰到数字
+# ============================================================
+
+ANGLE_RING_CENTER_X = 18.0
+
+ANGLE_RING_CENTER_Y = 18.0
+
+
+# ============================================================
+# ⭐ 圆环半径
+#
+# 这是你以后最主要调整的参数。
+# ============================================================
+
+ANGLE_RING_RADIUS = 13.0
+
+
+# ============================================================
+# 圆环 Mask 厚度
+# ============================================================
+
+ANGLE_RING_THICKNESS = 3.0
+
+
+# ============================================================
+# 11. 圆环 Mask 边缘柔化
+#
+# 0：
+#     不额外处理
+#
+# 1~2：
+#     轻微扩大 Mask
+#
+# 如果圆环还有极少残留，
+# 可以从 0 调到 1。
+# ============================================================
+
+ANGLE_RING_MASK_DILATE = 0
+
+
+# ============================================================
+# 12. OCR 输入边框
 # ============================================================
 
 BORDER_TOP = 8
+
 BORDER_BOTTOM = 8
+
 BORDER_LEFT = 12
+
 BORDER_RIGHT = 12
 
 
 # ============================================================
-# 6. OCR Worker 数量
-#
-# 当前建议保持 1。
+# 13. OCR Worker
 # ============================================================
 
 OCR_WORKER_COUNT = 1
 
 
 # ============================================================
-# 7. OCR 最小刷新间隔
-#
-# 单位：秒。
+# 14. OCR 最小刷新间隔
 # ============================================================
 
 MIN_INTERVALS = {
@@ -123,14 +328,7 @@ MIN_INTERVALS = {
 
 
 # ============================================================
-# 8. ROI 变化阈值
-#
-# 数值越小：
-#     更敏感
-#     OCR 更频繁
-#
-# 数值越大：
-#     更省 CPU
+# 15. ROI 变化检测阈值
 # ============================================================
 
 CHANGE_THRESHOLDS = {
@@ -146,14 +344,14 @@ CHANGE_THRESHOLDS = {
 
 
 # ============================================================
-# 9. 静态信息刷新
+# 16. 静态字段刷新
 # ============================================================
 
 STATIC_REFRESH_INTERVAL = 2.0
 
 
 # ============================================================
-# 10. OCR 数值合法范围
+# 17. 数值范围保护
 # ============================================================
 
 NUMERIC_RANGES = {
@@ -191,7 +389,7 @@ NUMERIC_RANGES = {
 
 
 # ============================================================
-# 11. Debug 图片字段
+# 18. Debug 图片
 # ============================================================
 
 DEBUG_FIELDS = (
@@ -213,59 +411,60 @@ DEBUG_FIELDS = (
 
 
 # ============================================================
-# Windows / ONNX Runtime DLL 处理
+# Windows / ONNX Runtime DLL
 # ============================================================
 
 def _prepare_windows_dll_environment():
     """
-    尽量在 RapidOCR / ONNX Runtime 导入前准备 Windows DLL 环境。
-
-    解决部分 Windows + Python 3.12 环境中：
-
-        onnxruntime_pybind11_state
-        DLL initialization routine failed
-
-    的问题。
-
-    这里只做环境准备，不改变 OCR 算法。
+    在 RapidOCR / ONNX Runtime 导入前准备 Windows DLL 环境。
     """
 
     if platform.system() != "Windows":
-        return
 
-    # ========================================================
-    # 1. Python 自身 DLL 路径
-    # ========================================================
+        return
 
     dll_directories = set()
 
-    python_root = (
-        Path(sys.executable)
-        .resolve()
-        .parent
-    )
-
-    dll_directories.add(
-        python_root
-    )
-
-    python_dll_dir = (
-        python_root / "DLLs"
-    )
-
-    if python_dll_dir.exists():
-
-        dll_directories.add(
-            python_dll_dir
-        )
-
     # ========================================================
-    # 2. site-packages 路径
+    # Python
     # ========================================================
 
     try:
 
-        site_packages = site.getsitepackages()
+        python_root = (
+            Path(sys.executable)
+            .resolve()
+            .parent
+        )
+
+        dll_directories.add(
+            python_root
+        )
+
+        python_dll_dir = (
+            python_root
+            / "DLLs"
+        )
+
+        if python_dll_dir.exists():
+
+            dll_directories.add(
+                python_dll_dir
+            )
+
+    except Exception:
+
+        pass
+
+    # ========================================================
+    # site-packages
+    # ========================================================
+
+    try:
+
+        site_packages = (
+            site.getsitepackages()
+        )
 
     except Exception:
 
@@ -288,10 +487,12 @@ def _prepare_windows_dll_environment():
             pass
 
     # ========================================================
-    # 3. ONNX Runtime capi
+    # ONNX Runtime
     # ========================================================
 
-    for base in list(dll_directories):
+    for base in list(
+        dll_directories
+    ):
 
         ort_capi = (
             base
@@ -306,9 +507,7 @@ def _prepare_windows_dll_environment():
             )
 
     # ========================================================
-    # 4. os.add_dll_directory
-    #
-    # Python 3.8+ Windows 支持。
+    # Windows DLL search path
     # ========================================================
 
     add_dll_directory = getattr(
@@ -319,7 +518,9 @@ def _prepare_windows_dll_environment():
 
     if add_dll_directory is not None:
 
-        for directory in dll_directories:
+        for directory in (
+            dll_directories
+        ):
 
             try:
 
@@ -334,10 +535,7 @@ def _prepare_windows_dll_environment():
                 pass
 
     # ========================================================
-    # 5. 预加载 MSVC Runtime
-    #
-    # ONNX Runtime 官方文档也建议 Windows
-    # 环境确保 MSVC runtime 可用。
+    # MSVC runtime
     # ========================================================
 
     runtime_dlls = (
@@ -359,19 +557,21 @@ def _prepare_windows_dll_environment():
 
         except OSError:
 
-            # 可能本身已经存在但无法通过当前路径加载。
-            # 不在这里直接终止，让后面的详细错误处理。
             pass
 
-
-# ============================================================
-# 在 cv2 / RapidOCR 导入前准备 DLL
-# ============================================================
 
 _prepare_windows_dll_environment()
 
 
+# ============================================================
+# OCRParser
+# ============================================================
+
 class OCRParser:
+
+    # ========================================================
+    # Dynamic fields
+    # ========================================================
 
     DYNAMIC_FIELDS = (
 
@@ -386,6 +586,10 @@ class OCRParser:
         "enemy_distance",
     )
 
+    # ========================================================
+    # Static fields
+    # ========================================================
+
     STATIC_FIELDS = (
 
         "ship_name",
@@ -397,32 +601,132 @@ class OCRParser:
         self,
 
         # =====================================================
-        # 可由 VisionManager 覆盖的参数
+        # 基础参数
         # =====================================================
 
-        numeric_scale: float = NUMERIC_SCALE,
+        numeric_scale: float = (
+            NUMERIC_SCALE
+        ),
 
-        normal_scale_small: float = NORMAL_SCALE_SMALL,
+        normal_scale_small: float = (
+            NORMAL_SCALE_SMALL
+        ),
 
-        normal_scale_large: float = NORMAL_SCALE_LARGE,
+        normal_scale_large: float = (
+            NORMAL_SCALE_LARGE
+        ),
 
         normal_text_height_threshold: int = (
             NORMAL_TEXT_HEIGHT_THRESHOLD
         ),
 
-        binary_min_value: int = BINARY_MIN_VALUE,
-
         binary_max_saturation: int = (
             BINARY_MAX_SATURATION
         ),
 
-        border_top: int = BORDER_TOP,
+        # =====================================================
+        # Background
+        # =====================================================
 
-        border_bottom: int = BORDER_BOTTOM,
+        background_blur_kernel=(
+            BACKGROUND_BLUR_KERNEL
+        ),
 
-        border_left: int = BORDER_LEFT,
+        # =====================================================
+        # Top-Hat
+        # =====================================================
 
-        border_right: int = BORDER_RIGHT,
+        tophat_kernel=(
+            TOPHAT_KERNEL
+        ),
+
+        tophat_gain: float = (
+            TOPHAT_GAIN
+        ),
+
+        tophat_post_blur_kernel=(
+            TOPHAT_POST_BLUR_KERNEL
+        ),
+
+        # =====================================================
+        # Adaptive Threshold
+        # =====================================================
+
+        adaptive_block_size: int = (
+            ADAPTIVE_BLOCK_SIZE
+        ),
+
+        adaptive_c: float = (
+            ADAPTIVE_C
+        ),
+
+        # =====================================================
+        # Noise Removal
+        # =====================================================
+
+        noise_open_kernel=(
+            NOISE_OPEN_KERNEL
+        ),
+
+        noise_open_iterations: int = (
+            NOISE_OPEN_ITERATIONS
+        ),
+
+        post_morph_kernel=(
+            POST_MORPH_KERNEL
+        ),
+
+        post_morph_close_iterations: int = (
+            POST_MORPH_CLOSE_ITERATIONS
+        ),
+
+        min_foreground_component_area: int = (
+            MIN_FOREGROUND_COMPONENT_AREA
+        ),
+
+        # =====================================================
+        # Angle Ring
+        # =====================================================
+
+        angle_ring_center_x: float = (
+            ANGLE_RING_CENTER_X
+        ),
+
+        angle_ring_center_y: float = (
+            ANGLE_RING_CENTER_Y
+        ),
+
+        angle_ring_radius: float = (
+            ANGLE_RING_RADIUS
+        ),
+
+        angle_ring_thickness: float = (
+            ANGLE_RING_THICKNESS
+        ),
+
+        angle_ring_mask_dilate: int = (
+            ANGLE_RING_MASK_DILATE
+        ),
+
+        # =====================================================
+        # Border
+        # =====================================================
+
+        border_top: int = (
+            BORDER_TOP
+        ),
+
+        border_bottom: int = (
+            BORDER_BOTTOM
+        ),
+
+        border_left: int = (
+            BORDER_LEFT
+        ),
+
+        border_right: int = (
+            BORDER_RIGHT
+        ),
     ):
 
         # =====================================================
@@ -441,17 +745,117 @@ class OCRParser:
             normal_scale_large
         )
 
-        self.normal_text_height_threshold = int(
-            normal_text_height_threshold
-        )
-
-        self.binary_min_value = int(
-            binary_min_value
+        self.normal_text_height_threshold = (
+            int(
+                normal_text_height_threshold
+            )
         )
 
         self.binary_max_saturation = int(
             binary_max_saturation
         )
+
+        # -----------------------------------------------------
+        # Background
+        # -----------------------------------------------------
+
+        self.background_blur_kernel = (
+            tuple(
+                background_blur_kernel
+            )
+        )
+
+        # -----------------------------------------------------
+        # Top-Hat
+        # -----------------------------------------------------
+
+        self.tophat_kernel = (
+            tuple(
+                tophat_kernel
+            )
+        )
+
+        self.tophat_gain = float(
+            tophat_gain
+        )
+
+        self.tophat_post_blur_kernel = (
+            tuple(
+                tophat_post_blur_kernel
+            )
+        )
+
+        # -----------------------------------------------------
+        # Adaptive
+        # -----------------------------------------------------
+
+        self.adaptive_block_size = int(
+            adaptive_block_size
+        )
+
+        self.adaptive_c = float(
+            adaptive_c
+        )
+
+        # -----------------------------------------------------
+        # Noise
+        # -----------------------------------------------------
+
+        self.noise_open_kernel = (
+            tuple(
+                noise_open_kernel
+            )
+        )
+
+        self.noise_open_iterations = int(
+            noise_open_iterations
+        )
+
+        self.post_morph_kernel = (
+            tuple(
+                post_morph_kernel
+            )
+        )
+
+        self.post_morph_close_iterations = (
+            int(
+                post_morph_close_iterations
+            )
+        )
+
+        self.min_foreground_component_area = (
+            int(
+                min_foreground_component_area
+            )
+        )
+
+        # -----------------------------------------------------
+        # Angle Ring
+        # -----------------------------------------------------
+
+        self.angle_ring_center_x = float(
+            angle_ring_center_x
+        )
+
+        self.angle_ring_center_y = float(
+            angle_ring_center_y
+        )
+
+        self.angle_ring_radius = float(
+            angle_ring_radius
+        )
+
+        self.angle_ring_thickness = float(
+            angle_ring_thickness
+        )
+
+        self.angle_ring_mask_dilate = int(
+            angle_ring_mask_dilate
+        )
+
+        # -----------------------------------------------------
+        # Border
+        # -----------------------------------------------------
 
         self.border_top = int(
             border_top
@@ -488,14 +892,6 @@ class OCRParser:
             raise RuntimeError(
                 "\n"
                 "RapidOCR / ONNX Runtime 导入失败。\n"
-                "\n"
-                "如果错误包含：\n"
-                "DLL initialization routine failed\n"
-                "\n"
-                "请检查：\n"
-                "1. Microsoft Visual C++ Redistributable x64\n"
-                "2. Python / NumPy / ONNX Runtime 位数是否一致\n"
-                "3. onnxruntime 是否能单独 import\n"
             ) from exc
 
         self.EngineType = EngineType
@@ -507,18 +903,6 @@ class OCRParser:
         print(
             "[OCR] 正在加载 RapidOCR..."
         )
-
-        # =====================================================
-        # RapidOCR 参数
-        #
-        # 注意：
-        #
-        # RapidOCR 当前版本的构造函数会初始化
-        # Det / Cls / Rec 三个模型，即使最终调用时
-        # use_det=False / use_cls=False。
-        #
-        # 因此 ONNX Runtime 必须在构造阶段可用。
-        # =====================================================
 
         params = {
 
@@ -539,9 +923,6 @@ class OCRParser:
 
             # -------------------------------------------------
             # Detection
-            #
-            # 当前虽然不运行，
-            # RapidOCR 仍会在初始化时创建 detector。
             # -------------------------------------------------
 
             "Det.engine_type":
@@ -591,9 +972,6 @@ class OCRParser:
             raise RuntimeError(
                 "\n"
                 "[OCR] RapidOCR 初始化失败。\n"
-                "\n"
-                "当前错误来自 ONNX Runtime / Windows DLL，\n"
-                "而不是 OCR ROI 或图像预处理。\n"
                 "\n"
                 f"原始错误：\n{exc}\n"
             ) from exc
@@ -645,7 +1023,7 @@ class OCRParser:
         self.last_probe = {}
 
         # =====================================================
-        # OCR Submit 时间
+        # OCR 时间
         # =====================================================
 
         self.last_submit_time = {}
@@ -659,7 +1037,7 @@ class OCRParser:
         )
 
         # =====================================================
-        # Static Queue
+        # Static
         # =====================================================
 
         self.static_queue = []
@@ -736,7 +1114,10 @@ class OCRParser:
 
         if result is None:
 
-            return "", 0.0
+            return (
+                "",
+                0.0,
+            )
 
         txts = getattr(
             result,
@@ -752,7 +1133,10 @@ class OCRParser:
 
         if txts is None:
 
-            return "", 0.0
+            return (
+                "",
+                0.0,
+            )
 
         if isinstance(
             txts,
@@ -820,76 +1204,410 @@ class OCRParser:
         )
 
     # =========================================================
-    # 白 / 灰文字
+    # Local Background
     # =========================================================
 
-    def _white_text_binary(
+    def _normalize_local_background(
+        self,
+        value: np.ndarray,
+    ) -> np.ndarray:
+
+        background = cv2.GaussianBlur(
+            value,
+            self.background_blur_kernel,
+            0,
+        )
+
+        value_i = (
+            value.astype(
+                np.int16
+            )
+        )
+
+        background_i = (
+            background.astype(
+                np.int16
+            )
+        )
+
+        normalized = (
+            value_i
+            - background_i
+        )
+
+        normalized = np.clip(
+            normalized,
+            0,
+            255,
+        ).astype(
+            np.uint8
+        )
+
+        return normalized
+
+    # =========================================================
+    # Top-Hat
+    # =========================================================
+
+    def _tophat(
+        self,
+        value: np.ndarray,
+    ) -> np.ndarray:
+
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            self.tophat_kernel,
+        )
+
+        tophat = cv2.morphologyEx(
+            value,
+            cv2.MORPH_TOPHAT,
+            kernel,
+        )
+
+        if self.tophat_gain != 1.0:
+
+            enhanced = cv2.convertScaleAbs(
+                tophat,
+                alpha=self.tophat_gain,
+                beta=0,
+            )
+
+        else:
+
+            enhanced = tophat
+
+        if (
+            self.tophat_post_blur_kernel
+            != (1, 1)
+        ):
+
+            enhanced = cv2.GaussianBlur(
+                enhanced,
+                self.tophat_post_blur_kernel,
+                0,
+            )
+
+        return enhanced
+
+    # =========================================================
+    # 自适应阈值
+    # =========================================================
+
+    def _adaptive_threshold(
         self,
         image: np.ndarray,
     ) -> np.ndarray:
 
-        hsv = cv2.cvtColor(
+        block_size = (
+            self.adaptive_block_size
+        )
+
+        if block_size < 3:
+
+            block_size = 3
+
+        if block_size % 2 == 0:
+
+            block_size += 1
+
+        return cv2.adaptiveThreshold(
             image,
-            cv2.COLOR_BGR2HSV,
-        )
-
-        lower = np.array(
-            [
-                0,
-                0,
-                self.binary_min_value,
-            ],
-            dtype=np.uint8,
-        )
-
-        upper = np.array(
-            [
-                179,
-                self.binary_max_saturation,
-                255,
-            ],
-            dtype=np.uint8,
-        )
-
-        return cv2.inRange(
-            hsv,
-            lower,
-            upper,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            block_size,
+            self.adaptive_c,
         )
 
     # =========================================================
-    # 普通文字 CLOSE
+    # Opening 去噪
     # =========================================================
 
-    def _clean_normal_binary(
+    def _remove_small_noise(
         self,
         binary: np.ndarray,
     ) -> np.ndarray:
 
         kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            self.noise_open_kernel,
+        )
+
+        cleaned = cv2.morphologyEx(
+            binary,
+            cv2.MORPH_OPEN,
+            kernel,
+            iterations=(
+                self.noise_open_iterations
+            ),
+        )
+
+        return cleaned
+
+    # =========================================================
+    # 小连通区域过滤
+    # =========================================================
+
+    def _remove_small_components(
+        self,
+        binary: np.ndarray,
+    ) -> np.ndarray:
+
+        # =====================================================
+        # 前景：
+        #
+        #     白色
+        #
+        # 此时 binary 还是：
+        #
+        #     白字黑底
+        # =====================================================
+
+        num_labels, labels, stats, _ = (
+            cv2.connectedComponentsWithStats(
+                binary,
+                connectivity=8,
+            )
+        )
+
+        cleaned = np.zeros_like(
+            binary
+        )
+
+        for label in range(
+            1,
+            num_labels,
+        ):
+
+            area = int(
+                stats[
+                    label,
+                    cv2.CC_STAT_AREA,
+                ]
+            )
+
+            if (
+                area
+                < self.min_foreground_component_area
+            ):
+
+                continue
+
+            cleaned[
+                labels == label
+            ] = 255
+
+        return cleaned
+
+    # =========================================================
+    # Closing
+    # =========================================================
+
+    def _repair_text(
+        self,
+        binary: np.ndarray,
+        normal_text: bool,
+    ) -> np.ndarray:
+
+        if not normal_text:
+
+            return binary
+
+        kernel = cv2.getStructuringElement(
             cv2.MORPH_RECT,
-            NORMAL_CLOSE_KERNEL,
+            self.post_morph_kernel,
         )
 
         return cv2.morphologyEx(
             binary,
             cv2.MORPH_CLOSE,
             kernel,
-            iterations=1,
+            iterations=(
+                self.post_morph_close_iterations
+            ),
         )
 
     # =========================================================
-    # 反色
+    # 圆环 Mask
     # =========================================================
 
-    @staticmethod
-    def _invert(
-        image: np.ndarray,
+    def _create_angle_ring_mask(
+        self,
+        height: int,
+        width: int,
     ) -> np.ndarray:
 
-        return cv2.bitwise_not(
-            image
+        """
+        创建固定几何圆环 Mask。
+
+        黑色：
+            要删除的圆环区域。
+
+        白色：
+            保留区域。
+
+        圆心、半径、厚度全部来自顶部调参区。
+        """
+
+        mask = np.ones(
+            (
+                height,
+                width,
+            ),
+            dtype=np.uint8,
+        ) * 255
+
+        center = (
+            int(
+                round(
+                    self.angle_ring_center_x
+                )
+            ),
+            int(
+                round(
+                    self.angle_ring_center_y
+                )
+            ),
         )
+
+        outer_radius = (
+            self.angle_ring_radius
+            + self.angle_ring_thickness / 2.0
+        )
+
+        inner_radius = (
+            max(
+                0.0,
+                self.angle_ring_radius
+                - self.angle_ring_thickness / 2.0,
+            )
+        )
+
+        # -----------------------------------------------------
+        # 先画外圆
+        # -----------------------------------------------------
+
+        cv2.circle(
+            mask,
+            center,
+            int(
+                round(
+                    outer_radius
+                )
+            ),
+            0,
+            thickness=-1,
+        )
+
+        # -----------------------------------------------------
+        # 再把内部恢复为白色
+        #
+        # 最终只剩下一个圆环形黑色区域。
+        # -----------------------------------------------------
+
+        if inner_radius > 0:
+
+            cv2.circle(
+                mask,
+                center,
+                int(
+                    round(
+                        inner_radius
+                    )
+                ),
+                255,
+                thickness=-1,
+            )
+
+        # -----------------------------------------------------
+        # 可选扩大 Mask
+        # -----------------------------------------------------
+
+        if (
+            self.angle_ring_mask_dilate
+            > 0
+        ):
+
+            kernel_size = (
+                self.angle_ring_mask_dilate
+                * 2
+                + 1
+            )
+
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                (
+                    kernel_size,
+                    kernel_size,
+                ),
+            )
+
+            inverse = cv2.bitwise_not(
+                mask
+            )
+
+            inverse = cv2.dilate(
+                inverse,
+                kernel,
+                iterations=1,
+            )
+
+            mask = cv2.bitwise_not(
+                inverse
+            )
+
+        return mask
+
+    # =========================================================
+    # 应用角度圆环 Mask
+    # =========================================================
+
+    def _remove_angle_ring(
+        self,
+        binary_black_text: np.ndarray,
+    ) -> np.ndarray:
+
+        height, width = (
+            binary_black_text.shape[:2]
+        )
+
+        ring_mask = (
+            self._create_angle_ring_mask(
+                height,
+                width,
+            )
+        )
+
+        # -----------------------------------------------------
+        # ring_mask：
+        #
+        #     255 = 保留
+        #     0   = 删除
+        # -----------------------------------------------------
+
+        result = cv2.bitwise_and(
+            binary_black_text,
+            ring_mask,
+        )
+
+        # -----------------------------------------------------
+        # 被删除的圆环区域必须变成白色。
+        #
+        # 因为现在是：
+        #
+        #     黑字白底
+        # -----------------------------------------------------
+
+        removed = (
+            ring_mask == 0
+        )
+
+        result[
+            removed
+        ] = 255
+
+        return result
 
     # =========================================================
     # Border
@@ -915,7 +1633,7 @@ class OCRParser:
         )
 
     # =========================================================
-    # BGR
+    # Gray → BGR
     # =========================================================
 
     @staticmethod
@@ -935,7 +1653,7 @@ class OCRParser:
         )
 
     # =========================================================
-    # 通用 preprocessing
+    # 通用 OCR preprocessing
     # =========================================================
 
     def _preprocess_binary(
@@ -943,6 +1661,7 @@ class OCRParser:
         roi: np.ndarray,
         scale: float,
         normal_text: bool,
+        remove_angle_ring: bool = False,
     ) -> np.ndarray:
 
         if (
@@ -952,39 +1671,186 @@ class OCRParser:
 
             return roi
 
-        # 1. 放大
+        # =====================================================
+        # 1. Resize
+        # =====================================================
+
         image = self._resize_roi(
             roi,
             scale,
         )
 
-        # 2. 白 / 灰文字提取
-        binary = (
-            self._white_text_binary(
-                image
+        # =====================================================
+        # 2. HSV
+        # =====================================================
+
+        hsv = cv2.cvtColor(
+            image,
+            cv2.COLOR_BGR2HSV,
+        )
+
+        saturation = (
+            hsv[:, :, 1]
+        )
+
+        value = (
+            hsv[:, :, 2]
+        )
+
+        # =====================================================
+        # 3. Local Background
+        # =====================================================
+
+        normalized = (
+            self._normalize_local_background(
+                value
             )
         )
 
-        # 3. 普通文字才进行 CLOSE
-        if normal_text:
+        # =====================================================
+        # 4. Top-Hat
+        # =====================================================
+
+        tophat = (
+            self._tophat(
+                value
+            )
+        )
+
+        # =====================================================
+        # 5. 融合
+        #
+        # 两个增强结果取最大值。
+        # =====================================================
+
+        enhanced = np.maximum(
+            normalized,
+            tophat,
+        )
+
+        # =====================================================
+        # 6. 彩色背景辅助抑制
+        #
+        # 不直接删除，
+        # 只把明显高饱和区域的增强强度降低。
+        # =====================================================
+
+        low_saturation = (
+            saturation
+            <= self.binary_max_saturation
+        )
+
+        enhanced = enhanced.copy()
+
+        enhanced[
+            ~low_saturation
+        ] = (
+            enhanced[
+                ~low_saturation
+            ]
+            // 3
+        )
+
+        # =====================================================
+        # 7. Adaptive Threshold
+        #
+        # 输出：
+        #
+        #     白字黑底
+        # =====================================================
+
+        binary = (
+            self._adaptive_threshold(
+                enhanced
+            )
+        )
+
+        # =====================================================
+        # 8. Opening
+        #
+        # ⭐ 新增：
+        #
+        # 去除零散小噪点。
+        # =====================================================
+
+        binary = (
+            self._remove_small_noise(
+                binary
+            )
+        )
+
+        # =====================================================
+        # 9. 连通组件过滤
+        #
+        # 删除非常小的孤立前景区域。
+        # =====================================================
+
+        binary = (
+            self._remove_small_components(
+                binary
+            )
+        )
+
+        # =====================================================
+        # 10. 普通文字修复
+        #
+        # 数字默认不做 Closing，
+        # 避免数字粘连。
+        # =====================================================
+
+        binary = (
+            self._repair_text(
+                binary,
+                normal_text,
+            )
+        )
+
+        # =====================================================
+        # 11. 反色
+        #
+        # 当前：
+        #
+        #     白字黑底
+        #
+        # 变成：
+        #
+        #     黑字白底
+        # =====================================================
+
+        binary = cv2.bitwise_not(
+            binary
+        )
+
+        # =====================================================
+        # 12. 相对角度专用圆环 Mask
+        #
+        # 这一步必须发生在反色以后。
+        #
+        # 因为最终要保证：
+        #
+        #     圆环区域 = 白色
+        # =====================================================
+
+        if remove_angle_ring:
 
             binary = (
-                self._clean_normal_binary(
+                self._remove_angle_ring(
                     binary
                 )
             )
 
-        # 4. 反色
-        binary = self._invert(
-            binary
-        )
+        # =====================================================
+        # 13. Border
+        # =====================================================
 
-        # 5. 加白边
         binary = self._add_border(
             binary
         )
 
-        # 6. 转 BGR
+        # =====================================================
+        # 14. BGR
+        # =====================================================
+
         binary = self._gray_to_bgr(
             binary
         )
@@ -992,12 +1858,13 @@ class OCRParser:
         return binary
 
     # =========================================================
-    # 数字
+    # Numeric
     # =========================================================
 
     def _preprocess_numeric(
         self,
         roi: np.ndarray,
+        remove_angle_ring: bool = False,
     ) -> np.ndarray:
 
         if (
@@ -1008,13 +1875,20 @@ class OCRParser:
             return roi
 
         return self._preprocess_binary(
+
             roi,
+
             scale=self.numeric_scale,
+
             normal_text=False,
+
+            remove_angle_ring=(
+                remove_angle_ring
+            ),
         )
 
     # =========================================================
-    # 普通文字
+    # Normal text
     # =========================================================
 
     def _preprocess_normal(
@@ -1047,13 +1921,18 @@ class OCRParser:
             )
 
         return self._preprocess_binary(
+
             roi,
+
             scale=scale,
+
             normal_text=True,
+
+            remove_angle_ring=False,
         )
 
     # =========================================================
-    # 字段 → preprocessing
+    # 根据字段选择 preprocessing
     # =========================================================
 
     def _prepare_roi(
@@ -1063,31 +1942,46 @@ class OCRParser:
         geometry: Optional[dict],
     ) -> np.ndarray:
 
+        # =====================================================
+        # 相对角度
+        # =====================================================
+
         if field in (
-
-            "flight_time",
-
-            "aim_distance",
-
             "enemy_angle",
-
             "our_angle",
+        ):
 
+            return self._preprocess_numeric(
+                roi,
+                remove_angle_ring=True,
+            )
+
+        # =====================================================
+        # 普通数字
+        # =====================================================
+
+        if field in (
+            "flight_time",
+            "aim_distance",
             "enemy_distance",
-
             "max_speed",
         ):
 
             return self._preprocess_numeric(
-                roi
+                roi,
+                remove_angle_ring=False,
             )
+
+        # =====================================================
+        # 舰名
+        # =====================================================
 
         return self._preprocess_normal(
             roi
         )
 
     # =========================================================
-    # Debug
+    # Debug Image
     # =========================================================
 
     def _set_debug_image(
@@ -1104,8 +1998,10 @@ class OCRParser:
 
             return
 
-        image_copy = np.ascontiguousarray(
-            image.copy()
+        image_copy = (
+            np.ascontiguousarray(
+                image.copy()
+            )
         )
 
         with self._debug_image_lock:
@@ -1125,8 +2021,13 @@ class OCRParser:
 
             result = {}
 
-            for field, image in (
-                self._debug_processed_images.items()
+            for (
+                field,
+                image,
+            ) in (
+                self
+                ._debug_processed_images
+                .items()
             ):
 
                 if image is None:
@@ -1156,6 +2057,10 @@ class OCRParser:
             time.perf_counter()
         )
 
+        # =====================================================
+        # Processing
+        # =====================================================
+
         image = (
             self._prepare_roi(
                 field,
@@ -1164,11 +2069,20 @@ class OCRParser:
             )
         )
 
-        # 保存真正送入 OCR 的图片
+        # =====================================================
+        # Debug：
+        #
+        # 保存真正送给 OCR 的最终图片。
+        # =====================================================
+
         self._set_debug_image(
             field,
             image,
         )
+
+        # =====================================================
+        # OCR
+        # =====================================================
 
         result = (
             self._run_recognition(
@@ -1182,7 +2096,7 @@ class OCRParser:
             )
         )
 
-        cost_ms = (
+        elapsed = (
             time.perf_counter()
             - start
         ) * 1000.0
@@ -1191,7 +2105,7 @@ class OCRParser:
             field,
             text,
             score,
-            cost_ms,
+            elapsed,
         )
 
     # =========================================================
@@ -1222,12 +2136,16 @@ class OCRParser:
             )
         )
 
-        self.last_probe[field] = gray
+        self.last_probe[field] = (
+            gray
+        )
 
         if old is None:
+
             return True
 
         if old.shape != gray.shape:
+
             return True
 
         difference = cv2.absdiff(
@@ -1245,7 +2163,7 @@ class OCRParser:
         )
 
     # =========================================================
-    # 静态刷新
+    # Static Refresh
     # =========================================================
 
     def force_static_refresh(
@@ -1264,7 +2182,7 @@ class OCRParser:
         self.last_static_refresh = 0.0
 
     # =========================================================
-    # 锁定
+    # Lock
     # =========================================================
 
     def set_locked(
@@ -1289,7 +2207,7 @@ class OCRParser:
         self.was_locked = locked
 
     # =========================================================
-    # 数字纠正
+    # Numeric Normalize
     # =========================================================
 
     @staticmethod
@@ -1305,6 +2223,10 @@ class OCRParser:
             .replace("l", "1")
             .replace("|", "1")
         )
+
+    # =========================================================
+    # Extract Digits
+    # =========================================================
 
     @classmethod
     def _extract_digits(
@@ -1325,7 +2247,7 @@ class OCRParser:
         )
 
     # =========================================================
-    # 数值检查
+    # Numeric Range
     # =========================================================
 
     @staticmethod
@@ -1335,6 +2257,7 @@ class OCRParser:
     ) -> bool:
 
         if field not in NUMERIC_RANGES:
+
             return True
 
         minimum, maximum = (
@@ -1348,15 +2271,17 @@ class OCRParser:
         )
 
     # =========================================================
-    # OCR 完成
+    # OCR Poll
     # =========================================================
 
     def poll(self):
 
         if self.future is None:
+
             return
 
         if not self.future.done():
+
             return
 
         field = self.current_field
@@ -1370,13 +2295,25 @@ class OCRParser:
                 cost_ms,
             ) = self.future.result()
 
-            self.last_ocr_ms = cost_ms
+            # =================================================
+            # Debug
+            # =================================================
 
-            self.last_ocr_field = field
+            self.last_ocr_ms = (
+                cost_ms
+            )
 
-            self.last_ocr_text = text
+            self.last_ocr_field = (
+                field
+            )
 
-            self.last_ocr_score = score
+            self.last_ocr_text = (
+                text
+            )
+
+            self.last_ocr_score = (
+                score
+            )
 
             # =================================================
             # Flight Time
@@ -1384,8 +2321,10 @@ class OCRParser:
 
             if field == "flight_time":
 
-                digits = self._extract_digits(
-                    text
+                digits = (
+                    self._extract_digits(
+                        text
+                    )
                 )
 
                 if digits:
@@ -1400,11 +2339,11 @@ class OCRParser:
                         value,
                     ):
 
-                        self.cache[field] = (
-                            round(
-                                value,
-                                2,
-                            )
+                        self.cache[
+                            field
+                        ] = round(
+                            value,
+                            2,
                         )
 
             # =================================================
@@ -1413,8 +2352,10 @@ class OCRParser:
 
             elif field == "aim_distance":
 
-                digits = self._extract_digits(
-                    text
+                digits = (
+                    self._extract_digits(
+                        text
+                    )
                 )
 
                 if digits:
@@ -1429,11 +2370,11 @@ class OCRParser:
                         value,
                     ):
 
-                        self.cache[field] = (
-                            round(
-                                value,
-                                2,
-                            )
+                        self.cache[
+                            field
+                        ] = round(
+                            value,
+                            2,
                         )
 
             # =================================================
@@ -1442,8 +2383,10 @@ class OCRParser:
 
             elif field == "enemy_angle":
 
-                digits = self._extract_digits(
-                    text
+                digits = (
+                    self._extract_digits(
+                        text
+                    )
                 )
 
                 if digits:
@@ -1457,7 +2400,9 @@ class OCRParser:
                         value,
                     ):
 
-                        self.cache[field] = value
+                        self.cache[
+                            field
+                        ] = value
 
             # =================================================
             # Our Angle
@@ -1465,8 +2410,10 @@ class OCRParser:
 
             elif field == "our_angle":
 
-                digits = self._extract_digits(
-                    text
+                digits = (
+                    self._extract_digits(
+                        text
+                    )
                 )
 
                 if digits:
@@ -1480,7 +2427,9 @@ class OCRParser:
                         value,
                     ):
 
-                        self.cache[field] = value
+                        self.cache[
+                            field
+                        ] = value
 
             # =================================================
             # Enemy Distance
@@ -1488,8 +2437,10 @@ class OCRParser:
 
             elif field == "enemy_distance":
 
-                digits = self._extract_digits(
-                    text
+                digits = (
+                    self._extract_digits(
+                        text
+                    )
                 )
 
                 if digits:
@@ -1504,11 +2455,11 @@ class OCRParser:
                         value,
                     ):
 
-                        self.cache[field] = (
-                            round(
-                                value,
-                                1,
-                            )
+                        self.cache[
+                            field
+                        ] = round(
+                            value,
+                            1,
                         )
 
             # =================================================
@@ -1517,13 +2468,15 @@ class OCRParser:
 
             elif field == "ship_name":
 
-                clean_text = text.strip()
+                clean_text = (
+                    text.strip()
+                )
 
                 if clean_text:
 
-                    self.cache[field] = (
-                        clean_text
-                    )
+                    self.cache[
+                        field
+                    ] = clean_text
 
             # =================================================
             # Max Speed
@@ -1531,8 +2484,10 @@ class OCRParser:
 
             elif field == "max_speed":
 
-                digits = self._extract_digits(
-                    text
+                digits = (
+                    self._extract_digits(
+                        text
+                    )
                 )
 
                 if digits:
@@ -1547,11 +2502,11 @@ class OCRParser:
                         value,
                     ):
 
-                        self.cache[field] = (
-                            round(
-                                value,
-                                1,
-                            )
+                        self.cache[
+                            field
+                        ] = round(
+                            value,
+                            1,
                         )
 
         except Exception as exc:
@@ -1581,6 +2536,7 @@ class OCRParser:
     ) -> bool:
 
         if self.future is not None:
+
             return False
 
         now = (
@@ -1595,7 +2551,8 @@ class OCRParser:
         )
 
         if (
-            now - last_submit
+            now
+            - last_submit
             < self.min_interval[field]
         ):
 
@@ -1614,7 +2571,9 @@ class OCRParser:
 
         self.current_field = field
 
-        self.last_submit_time[field] = now
+        self.last_submit_time[
+            field
+        ] = now
 
         return True
 
@@ -1630,16 +2589,30 @@ class OCRParser:
         locked: bool,
     ):
 
+        # =====================================================
+        # Poll
+        # =====================================================
+
         self.poll()
+
+        # =====================================================
+        # Lock
+        # =====================================================
 
         self.set_locked(
             locked
         )
 
         if not locked:
+
             return
 
+        # =====================================================
+        # Worker busy
+        # =====================================================
+
         if self.future is not None:
+
             return
 
         now = (
@@ -1647,7 +2620,7 @@ class OCRParser:
         )
 
         # =====================================================
-        # Static
+        # Static fields
         # =====================================================
 
         static_due = (
@@ -1668,7 +2641,9 @@ class OCRParser:
             if not self.static_queue:
 
                 self.static_queue = [
+
                     "ship_name",
+
                     "max_speed",
                 ]
 
@@ -1699,8 +2674,6 @@ class OCRParser:
                             0
                         )
 
-                        # 防止静态 OCR 永远循环，
-                        # 让动态 OCR 获得执行机会。
                         if not self.static_queue:
 
                             self.static_refresh_needed = (
@@ -1730,14 +2703,16 @@ class OCRParser:
                 )
 
         # =====================================================
-        # Dynamic
+        # Dynamic fields
         # =====================================================
 
         field_count = len(
             self.DYNAMIC_FIELDS
         )
 
-        for i in range(field_count):
+        for i in range(
+            field_count
+        ):
 
             index = (
                 self.round_robin_index
@@ -1751,6 +2726,7 @@ class OCRParser:
             )
 
             if field not in roi_map:
+
                 continue
 
             rx, ry, rw, rh = (
@@ -1763,6 +2739,7 @@ class OCRParser:
             ]
 
             if roi.size == 0:
+
                 continue
 
             # -------------------------------------------------
@@ -1786,7 +2763,7 @@ class OCRParser:
                 continue
 
             # -------------------------------------------------
-            # 其它动态字段
+            # 普通动态字段
             # -------------------------------------------------
 
             if not self._has_changed(
@@ -1809,7 +2786,7 @@ class OCRParser:
                 return
 
     # =========================================================
-    # 标准入口
+    # Standard Module Entry
     # =========================================================
 
     def process(
@@ -1865,3 +2842,32 @@ class OCRParser:
                 self._debug_processed_images[
                     field
                 ] = None
+
+
+# ============================================================
+# Standalone Debug
+# ============================================================
+
+if __name__ == "__main__":
+
+    print(
+        "[OCR] OCRParser 模块加载测试..."
+    )
+
+    try:
+
+        parser = OCRParser()
+
+        print(
+            "[OCR] OCRParser 初始化成功。"
+        )
+
+    except Exception as exc:
+
+        print(
+            "[OCR] OCRParser 初始化失败："
+        )
+
+        print(
+            exc
+        )
