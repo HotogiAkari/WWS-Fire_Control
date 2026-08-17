@@ -1,0 +1,1 @@
+# 轨迹生成器：将预测结果封装为 TrajectoryPath 对象

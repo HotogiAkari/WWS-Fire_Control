@@ -1,0 +1,1 @@
+# 数据录制工具：挂机回放时使用，收集 TargetState 保存为 JSON 用于 AI 训练
