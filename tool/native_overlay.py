@@ -23,7 +23,160 @@ if PROJECT_ROOT not in sys.path:
 
 
 # ============================================================
-# Vision
+# Overlay 调参区
+#
+# 这里只放 Overlay / Debug 显示相关参数。
+# Recognition 算法参数不要放这里。
+#
+# OCR 参数：
+#     recognition/vision_manager.py
+#
+# 血条 / ROI / 禁区：
+#     recognition/indicator_parser.py
+#
+# OCR preprocessing：
+#     recognition/ocr_parser.py
+# ============================================================
+
+
+# ============================================================
+# 1. Vision Worker FPS
+#
+# 调高：
+#     视觉更新更快
+#     CPU 占用增加
+#
+# 调低：
+#     CPU 占用降低
+#     数据刷新变慢
+# ============================================================
+
+VISION_TARGET_FPS = 30.0
+
+
+# ============================================================
+# 2. Debug Panel
+#
+# 左上角数据面板。
+# ============================================================
+
+PANEL_X = 25
+PANEL_Y = 25
+
+PANEL_W = 760
+PANEL_H = 520
+
+
+# ============================================================
+# 3. OCR Debug Preview
+#
+# OCR 处理后的图片横向排列在左上角面板内部。
+# ============================================================
+
+OCR_PREVIEW_GAP = 7
+
+OCR_PREVIEW_CELL_H = 105
+
+
+# ============================================================
+# OCR Debug Preview 显示顺序
+# ============================================================
+
+OCR_PREVIEW_FIELDS = (
+
+    "flight_time",
+
+    "aim_distance",
+
+    "enemy_angle",
+
+    "our_angle",
+
+    "enemy_distance",
+
+    "max_speed",
+
+    "ship_name",
+)
+
+
+# ============================================================
+# OCR Debug Preview 显示名称
+# ============================================================
+
+OCR_PREVIEW_LABELS = {
+
+    "flight_time":
+        "Flight",
+
+    "aim_distance":
+        "Aim",
+
+    "enemy_angle":
+        "Enemy Ang",
+
+    "our_angle":
+        "Our Ang",
+
+    "enemy_distance":
+        "Enemy Dist",
+
+    "max_speed":
+        "Max Speed",
+
+    "ship_name":
+        "Ship Name",
+}
+
+
+# ============================================================
+# 4. Performance / Debug 文字
+# ============================================================
+
+RAW_OCR_MAX_LENGTH = 70
+
+
+# ============================================================
+# 5. 数据面板第一行
+#
+# OCR 图片之后的数据从这里开始。
+# ============================================================
+
+DATA_START_Y = 255
+
+DATA_ROW_HEIGHT = 29
+
+
+# ============================================================
+# 6. 中央十字大小
+# ============================================================
+
+CENTER_CROSS_SIZE = 20
+
+
+# ============================================================
+# 7. 目标中心十字大小
+# ============================================================
+
+TARGET_CROSS_SIZE = 8
+
+
+# ============================================================
+# 8. 状态灯 Debug 框大小
+# ============================================================
+
+LIGHT_DEBUG_SIZE = 6
+
+
+# ============================================================
+# 9. UI 禁区 Debug
+# ============================================================
+
+SHOW_UI_EXCLUSION_REGIONS = True
+
+
+# ============================================================
+# Imports
 # ============================================================
 
 from common.config_loader import ConfigLoader
@@ -68,7 +221,7 @@ class VisionWorker(QThread):
 
     data_signal = pyqtSignal(dict)
 
-    TARGET_FPS = 30.0
+    TARGET_FPS = VISION_TARGET_FPS
 
     def __init__(
         self,
@@ -80,6 +233,17 @@ class VisionWorker(QThread):
         self.vision = vision
 
         self.running = True
+
+        # =====================================================
+        # 上一帧 Anchor
+        #
+        # 非常重要：
+        #
+        # 这里保存的必须始终是“上一帧”的结果。
+        #
+        # 当前帧处理完成以后，
+        # 才会把 current anchor 写回来。
+        # =====================================================
 
         self.previous_anchor = None
 
@@ -141,7 +305,17 @@ class VisionWorker(QThread):
             )
 
             # =================================================
-            # 动态目标
+            # 保存“上一帧” Anchor
+            #
+            # 当前帧所有跟踪判断都必须使用这个值。
+            # =================================================
+
+            previous_anchor = (
+                self.previous_anchor
+            )
+
+            # =================================================
+            # 当前帧寻找目标
             # =================================================
 
             anchor = (
@@ -150,30 +324,30 @@ class VisionWorker(QThread):
                 .find_locked_anchor(
                     frame_hsv,
                     previous_anchor=(
-                        self.previous_anchor
+                        previous_anchor
                     ),
                 )
             )
 
             # =================================================
-            # 目标切换
+            # Target switch
             # =================================================
 
             target_switched = False
 
             if (
                 anchor is not None
-                and self.previous_anchor is not None
+                and previous_anchor is not None
             ):
 
                 dx = (
                     anchor[0]
-                    - self.previous_anchor[0]
+                    - previous_anchor[0]
                 )
 
                 dy = (
                     anchor[1]
-                    - self.previous_anchor[1]
+                    - previous_anchor[1]
                 )
 
                 jump_distance = (
@@ -200,29 +374,70 @@ class VisionWorker(QThread):
                 self.vision.notify_target_switch()
 
             # =================================================
-            # 更新跟踪
+            # VisionManager
+            #
+            # 注意：
+            #
+            # 这里必须传上一帧 Anchor。
+            #
+            # 不能提前执行：
+            #
+            #     self.previous_anchor = anchor
+            #
+            # 否则局部跟踪就会拿到当前帧自己。
             # =================================================
 
-            if anchor is not None:
+            try:
 
-                self.previous_anchor = anchor
-
-            else:
-
-                self.previous_anchor = None
-
-            # =================================================
-            # Vision Manager
-            # =================================================
-
-            result = (
-                self.vision
-                .process_frame(
-                    frame_bgr=frame,
-                    frame_hsv=frame_hsv,
-                    anchor=anchor,
+                result = (
+                    self.vision
+                    .process_frame(
+                        frame_bgr=frame,
+                        frame_hsv=frame_hsv,
+                        anchor=anchor,
+                        previous_anchor=(
+                            previous_anchor
+                        ),
+                    )
                 )
-            )
+
+            except Exception as exc:
+
+                print(
+                    f"[Vision] "
+                    f"处理帧失败: {exc}"
+                )
+
+                # 保持上一帧状态，
+                # 下一帧继续尝试。
+                next_tick += interval
+
+                remaining = (
+                    next_tick
+                    - time.perf_counter()
+                )
+
+                if remaining > 0:
+
+                    time.sleep(
+                        remaining
+                    )
+
+                else:
+
+                    next_tick = (
+                        time.perf_counter()
+                    )
+
+                continue
+
+            # =================================================
+            # 当前帧处理完成
+            #
+            # 现在才能更新 previous_anchor。
+            # =================================================
+
+            self.previous_anchor = anchor
 
             # =================================================
             # Vision latency
@@ -234,7 +449,7 @@ class VisionWorker(QThread):
             ) * 1000.0
 
             # =================================================
-            # Debug
+            # Debug Payload
             # =================================================
 
             payload = {
@@ -273,6 +488,10 @@ class VisionWorker(QThread):
                     .get_debug_regions(
                         anchor
                     ),
+
+                "ui_exclusion_regions":
+                    self.vision
+                    .get_ui_exclusion_regions(),
             }
 
             self.data_signal.emit(
@@ -449,7 +668,9 @@ class TransparentOverlay(QWidget):
 
             if self.fps_tracker <= 0:
 
-                self.fps_tracker = instant_fps
+                self.fps_tracker = (
+                    instant_fps
+                )
 
             else:
 
@@ -463,7 +684,7 @@ class TransparentOverlay(QWidget):
         self.update()
 
     # =========================================================
-    # OCR Debug Preview
+    # OpenCV Image → QImage
     # =========================================================
 
     @staticmethod
@@ -477,10 +698,6 @@ class TransparentOverlay(QWidget):
         ):
 
             return None
-
-        # =====================================================
-        # 确保是三通道 BGR
-        # =====================================================
 
         if image.ndim == 2:
 
@@ -504,10 +721,6 @@ class TransparentOverlay(QWidget):
             bgr
         )
 
-        # =====================================================
-        # BGR → RGB
-        # =====================================================
-
         rgb = cv2.cvtColor(
             bgr,
             cv2.COLOR_BGR2RGB,
@@ -529,11 +742,348 @@ class TransparentOverlay(QWidget):
             QImage.Format_RGB888,
         )
 
-        # copy()：
-        #
-        # QImage 不继续引用 numpy 内存，
-        # 避免函数退出后 rgb 被释放。
+        # 必须 copy：
+        # 否则 QImage 可能继续引用 Python ndarray 的内存。
         return qimage.copy()
+
+    # =========================================================
+    # UI 禁区 Debug
+    # =========================================================
+
+    def _draw_ui_exclusions(
+        self,
+        painter: QPainter,
+    ):
+
+        if not SHOW_UI_EXCLUSION_REGIONS:
+            return
+
+        regions = (
+            self.vision
+            .get_ui_exclusion_regions()
+        )
+
+        painter.setFont(
+            QFont(
+                "Consolas",
+                8,
+                QFont.Bold,
+            )
+        )
+
+        for region in regions:
+
+            name = region["name"]
+
+            rx, ry, rw, rh = (
+                region["rect"]
+            )
+
+            if rw <= 0 or rh <= 0:
+                continue
+
+            painter.setPen(
+                QPen(
+                    QColor(
+                        255,
+                        80,
+                        80,
+                        190,
+                    ),
+                    1,
+                    Qt.DashLine,
+                )
+            )
+
+            painter.setBrush(
+                QBrush(
+                    QColor(
+                        255,
+                        0,
+                        0,
+                        20,
+                    )
+                )
+            )
+
+            painter.drawRect(
+                rx,
+                ry,
+                rw,
+                rh,
+            )
+
+            painter.setPen(
+                QColor(
+                    255,
+                    100,
+                    100,
+                )
+            )
+
+            painter.drawText(
+                rx + 4,
+                ry + 12,
+                name,
+            )
+
+    # =========================================================
+    # OCR Debug Preview
+    # =========================================================
+
+    def _draw_ocr_previews(
+        self,
+        painter: QPainter,
+        panel_x: int,
+        panel_y: int,
+        panel_w: int,
+    ):
+
+        debug_images = (
+            self.vision
+            .ocr
+            .get_debug_images()
+        )
+
+        # =====================================================
+        # 标题
+        # =====================================================
+
+        title_y = (
+            panel_y + 104
+        )
+
+        painter.setFont(
+            QFont(
+                "Microsoft YaHei",
+                10,
+                QFont.Bold,
+            )
+        )
+
+        painter.setPen(
+            QColor(
+                120,
+                220,
+                255,
+            )
+        )
+
+        painter.drawText(
+            panel_x + 15,
+            title_y,
+            "OCR Processed Images",
+        )
+
+        # =====================================================
+        # 图片区域
+        # =====================================================
+
+        image_y = (
+            panel_y + 115
+        )
+
+        margin_left = (
+            panel_x + 15
+        )
+
+        gap = OCR_PREVIEW_GAP
+
+        total_width = (
+            panel_w - 30
+        )
+
+        count = len(
+            OCR_PREVIEW_FIELDS
+        )
+
+        if count <= 0:
+            return
+
+        cell_w = int(
+            (
+                total_width
+                - gap * (count - 1)
+            )
+            / count
+        )
+
+        cell_h = (
+            OCR_PREVIEW_CELL_H
+        )
+
+        for index, field in enumerate(
+            OCR_PREVIEW_FIELDS
+        ):
+
+            x = (
+                margin_left
+                + index
+                * (
+                    cell_w
+                    + gap
+                )
+            )
+
+            y = image_y
+
+            # =================================================
+            # Cell
+            # =================================================
+
+            painter.setPen(
+                QPen(
+                    QColor(
+                        90,
+                        210,
+                        240,
+                        190,
+                    ),
+                    1,
+                )
+            )
+
+            painter.setBrush(
+                QBrush(
+                    QColor(
+                        0,
+                        0,
+                        0,
+                        180,
+                    )
+                )
+            )
+
+            painter.drawRect(
+                x,
+                y,
+                cell_w,
+                cell_h,
+            )
+
+            # =================================================
+            # Label
+            # =================================================
+
+            label = (
+                OCR_PREVIEW_LABELS.get(
+                    field,
+                    field,
+                )
+            )
+
+            painter.setFont(
+                QFont(
+                    "Consolas",
+                    7,
+                    QFont.Bold,
+                )
+            )
+
+            painter.setPen(
+                QColor(
+                    120,
+                    220,
+                    255,
+                )
+            )
+
+            painter.drawText(
+                x + 3,
+                y + 11,
+                label,
+            )
+
+            # =================================================
+            # Image
+            # =================================================
+
+            image = (
+                debug_images.get(
+                    field
+                )
+            )
+
+            if image is None:
+
+                painter.setFont(
+                    QFont(
+                        "Consolas",
+                        7,
+                    )
+                )
+
+                painter.setPen(
+                    QColor(
+                        110,
+                        110,
+                        110,
+                    )
+                )
+
+                painter.drawText(
+                    x + 5,
+                    y + 57,
+                    "No image",
+                )
+
+                continue
+
+            qimage = (
+                self._build_qimage_from_cv(
+                    image
+                )
+            )
+
+            if qimage is None:
+                continue
+
+            available_w = (
+                cell_w - 6
+            )
+
+            available_h = (
+                cell_h - 18
+            )
+
+            if (
+                available_w <= 0
+                or available_h <= 0
+            ):
+
+                continue
+
+            scaled = qimage.scaled(
+                available_w,
+                available_h,
+                Qt.KeepAspectRatio,
+                Qt.FastTransformation,
+            )
+
+            image_x = (
+                x
+                + (
+                    cell_w
+                    - scaled.width()
+                )
+                // 2
+            )
+
+            image_y2 = (
+                y
+                + 14
+                + (
+                    available_h
+                    - scaled.height()
+                )
+                // 2
+            )
+
+            painter.drawImage(
+                image_x,
+                image_y2,
+                scaled,
+            )
 
     # =========================================================
     # Paint
@@ -547,7 +1097,9 @@ class TransparentOverlay(QWidget):
         if self.render_data is None:
             return
 
-        painter = QPainter(self)
+        painter = QPainter(
+            self
+        )
 
         painter.setRenderHint(
             QPainter.Antialiasing,
@@ -600,7 +1152,15 @@ class TransparentOverlay(QWidget):
         )
 
         # =====================================================
-        # Result 数据
+        # UI 禁区
+        # =====================================================
+
+        self._draw_ui_exclusions(
+            painter
+        )
+
+        # =====================================================
+        # Result
         # =====================================================
 
         if result is None:
@@ -612,8 +1172,6 @@ class TransparentOverlay(QWidget):
             ship_name = "Unknown"
 
             max_speed = 0.0
-
-            target_data = None
 
         else:
 
@@ -638,20 +1196,22 @@ class TransparentOverlay(QWidget):
                 )
             )
 
-            target_data = result.get(
-                "target"
-            )
-
         # =====================================================
-        # 1. 固定 HUD
+        # Fixed HUD
         # =====================================================
 
         fixed_fields = (
+
             "flight_time",
+
             "aim_distance",
+
             "ship_name",
+
             "max_speed",
+
             "enemy_angle",
+
             "our_angle",
         )
 
@@ -668,14 +1228,15 @@ class TransparentOverlay(QWidget):
             if name not in debug_regions:
                 continue
 
-            rect = debug_regions[name]["rect"]
+            rect = (
+                debug_regions[
+                    name
+                ]["rect"]
+            )
 
             rx, ry, rw, rh = rect
 
-            # -------------------------------------------------
-            # 绿色透明框
-            # -------------------------------------------------
-
+            # ROI
             painter.setPen(
                 QPen(
                     QColor(
@@ -706,9 +1267,11 @@ class TransparentOverlay(QWidget):
                 rh,
             )
 
-            value = hud_raw.get(
-                name,
-                "",
+            value = (
+                hud_raw.get(
+                    name,
+                    "",
+                )
             )
 
             painter.setPen(
@@ -726,8 +1289,10 @@ class TransparentOverlay(QWidget):
             )
 
         # =====================================================
-        # 2. 中央十字
+        # Center Cross
         # =====================================================
+
+        cross_size = CENTER_CROSS_SIZE
 
         painter.setPen(
             QPen(
@@ -743,21 +1308,21 @@ class TransparentOverlay(QWidget):
         )
 
         painter.drawLine(
-            self.cx - 20,
+            self.cx - cross_size,
             self.cy,
-            self.cx + 20,
+            self.cx + cross_size,
             self.cy,
         )
 
         painter.drawLine(
             self.cx,
-            self.cy - 20,
+            self.cy - cross_size,
             self.cx,
-            self.cy + 20,
+            self.cy + cross_size,
         )
 
         # =====================================================
-        # 3. 动态目标
+        # Target
         # =====================================================
 
         if anchor is not None:
@@ -771,9 +1336,9 @@ class TransparentOverlay(QWidget):
                 hh,
             ) = anchor
 
-            # -------------------------------------------------
-            # 血条
-            # -------------------------------------------------
+            # =================================================
+            # HP bar
+            # =================================================
 
             painter.setPen(
                 QPen(
@@ -798,9 +1363,9 @@ class TransparentOverlay(QWidget):
                 hh,
             )
 
-            # -------------------------------------------------
-            # 血条左上角
-            # -------------------------------------------------
+            # =================================================
+            # HP bar anchor
+            # =================================================
 
             painter.setPen(
                 QPen(
@@ -833,9 +1398,9 @@ class TransparentOverlay(QWidget):
                 3,
             )
 
-            # -------------------------------------------------
-            # 血条 → 圆心
-            # -------------------------------------------------
+            # =================================================
+            # HP → target center
+            # =================================================
 
             painter.drawLine(
                 hx_left,
@@ -844,9 +1409,13 @@ class TransparentOverlay(QWidget):
                 target_cy,
             )
 
-            # -------------------------------------------------
-            # 圆心十字
-            # -------------------------------------------------
+            # =================================================
+            # Target center
+            # =================================================
+
+            target_cross_size = (
+                TARGET_CROSS_SIZE
+            )
 
             painter.setPen(
                 QPen(
@@ -865,22 +1434,26 @@ class TransparentOverlay(QWidget):
             )
 
             painter.drawLine(
-                target_cx - 8,
+                target_cx
+                - target_cross_size,
                 target_cy,
-                target_cx + 8,
+                target_cx
+                + target_cross_size,
                 target_cy,
             )
 
             painter.drawLine(
                 target_cx,
-                target_cy - 8,
+                target_cy
+                - target_cross_size,
                 target_cx,
-                target_cy + 8,
+                target_cy
+                + target_cross_size,
             )
 
-            # -------------------------------------------------
-            # 航速圆环
-            # -------------------------------------------------
+            # =================================================
+            # Speed Ring
+            # =================================================
 
             radius = (
                 self.vision
@@ -914,9 +1487,9 @@ class TransparentOverlay(QWidget):
                 radius,
             )
 
-            # -------------------------------------------------
-            # 8 个人工采样点
-            # -------------------------------------------------
+            # =================================================
+            # 8 sampling points
+            # =================================================
 
             for index, (
                 dx,
@@ -985,9 +1558,9 @@ class TransparentOverlay(QWidget):
                     str(index + 1),
                 )
 
-            # -------------------------------------------------
-            # 状态灯框
-            # -------------------------------------------------
+            # =================================================
+            # State Light
+            # =================================================
 
             light_y = (
                 target_cy
@@ -995,6 +1568,10 @@ class TransparentOverlay(QWidget):
                 - self.vision
                 .indicators
                 .LIGHT_OFFSET
+            )
+
+            light_size = (
+                LIGHT_DEBUG_SIZE
             )
 
             painter.setPen(
@@ -1014,15 +1591,17 @@ class TransparentOverlay(QWidget):
             )
 
             painter.drawRect(
-                target_cx - 3,
-                light_y - 3,
-                6,
-                6,
+                target_cx
+                - light_size // 2,
+                light_y
+                - light_size // 2,
+                light_size,
+                light_size,
             )
 
-            # -------------------------------------------------
-            # 敌舰距离动态 ROI
-            # -------------------------------------------------
+            # =================================================
+            # Enemy Distance ROI
+            # =================================================
 
             enemy_distance_region = (
                 debug_regions.get(
@@ -1061,9 +1640,11 @@ class TransparentOverlay(QWidget):
                     eh,
                 )
 
-                distance_text = hud_raw.get(
-                    "enemy_distance",
-                    "",
+                distance_text = (
+                    hud_raw.get(
+                        "enemy_distance",
+                        "",
+                    )
                 )
 
                 painter.setFont(
@@ -1085,17 +1666,15 @@ class TransparentOverlay(QWidget):
                 painter.drawText(
                     ex,
                     ey - 4,
-                    f"Enemy Dist: {distance_text}",
+                    (
+                        "Enemy Dist: "
+                        f"{distance_text}"
+                    ),
                 )
 
         # =====================================================
-        # 4. 数据面板
+        # Data Panel
         # =====================================================
-
-        panel_x = 25
-        panel_y = 25
-        panel_w = 520
-        panel_h = 375
 
         painter.setPen(
             QPen(
@@ -1122,18 +1701,18 @@ class TransparentOverlay(QWidget):
 
         painter.drawRoundedRect(
             QRectF(
-                panel_x,
-                panel_y,
-                panel_w,
-                panel_h,
+                PANEL_X,
+                PANEL_Y,
+                PANEL_W,
+                PANEL_H,
             ),
             8,
             8,
         )
 
-        # -----------------------------------------------------
-        # 标题
-        # -----------------------------------------------------
+        # =====================================================
+        # Title
+        # =====================================================
 
         painter.setFont(
             QFont(
@@ -1152,13 +1731,13 @@ class TransparentOverlay(QWidget):
         )
 
         painter.drawText(
-            panel_x + 15,
-            panel_y + 28,
+            PANEL_X + 15,
+            PANEL_Y + 28,
             "WoWs AI Pre-Aim Data Inspector",
         )
 
         # =====================================================
-        # 性能
+        # Performance
         # =====================================================
 
         painter.setFont(
@@ -1181,33 +1760,39 @@ class TransparentOverlay(QWidget):
         )
 
         painter.drawText(
-            panel_x + 15,
-            panel_y + 48,
+            PANEL_X + 15,
+            PANEL_Y + 48,
             (
-                f"FPS: {self.fps_tracker:4.1f} | "
-                f"Vision: {cost_ms:4.1f}ms"
+                f"FPS: "
+                f"{self.fps_tracker:4.1f} | "
+                f"Vision: "
+                f"{cost_ms:4.1f}ms"
             ),
         )
 
         painter.drawText(
-            panel_x + 15,
-            panel_y + 64,
+            PANEL_X + 15,
+            PANEL_Y + 64,
             (
-                f"OCR: {ocr_ms:4.1f}ms | "
-                f"Field: {ocr_field} | "
-                f"Score: {ocr_score:.2f}"
+                f"OCR: "
+                f"{ocr_ms:4.1f}ms | "
+                f"Field: "
+                f"{ocr_field} | "
+                f"Score: "
+                f"{ocr_score:.2f}"
             ),
         )
 
         painter.drawText(
-            panel_x + 15,
-            panel_y + 80,
+            PANEL_X + 15,
+            PANEL_Y + 80,
             (
-                f"Raw OCR: "
-                f"{ocr_text[:48]}"
+                "Raw OCR: "
+                f"{ocr_text[:RAW_OCR_MAX_LENGTH]}"
             ),
         )
 
+        # LOCKED / SEARCHING
         painter.setPen(
             QColor(
                 0,
@@ -1223,14 +1808,18 @@ class TransparentOverlay(QWidget):
         )
 
         painter.drawText(
-            panel_x + 420,
-            panel_y + 48,
+            PANEL_X + PANEL_W - 90,
+            PANEL_Y + 48,
             (
                 "LOCKED"
                 if locked
                 else "SEARCHING"
             ),
         )
+
+        # =====================================================
+        # 分隔线
+        # =====================================================
 
         painter.setPen(
             QColor(
@@ -1241,180 +1830,25 @@ class TransparentOverlay(QWidget):
         )
 
         painter.drawLine(
-            panel_x + 15,
-            panel_y + 92,
-            panel_x + panel_w - 15,
-            panel_y + 92,
+            PANEL_X + 15,
+            PANEL_Y + 92,
+            PANEL_X + PANEL_W - 15,
+            PANEL_Y + 92,
         )
 
         # =====================================================
-        # OCR Processed Preview
-        #
-        # 显示：
-        #
-        #     OCRParser._recognize()
-        #         ↓
-        #     _prepare_roi()
-        #         ↓
-        #     最终 image
-        #         ↓
-        #     RapidOCR
-        #
-        # 所以这里看到的就是 OCR 实际收到的图片。
+        # OCR Images
         # =====================================================
 
-        debug_image, debug_field = (
-            self.vision
-            .ocr
-            .get_debug_image()
+        self._draw_ocr_previews(
+            painter,
+            PANEL_X,
+            PANEL_Y,
+            PANEL_W,
         )
-
-        preview_x = (
-            panel_x + 300
-        )
-
-        preview_y = (
-            panel_y + 105
-        )
-
-        preview_w = 205
-        preview_h = 100
-
-        # -----------------------------------------------------
-        # Preview 外框
-        # -----------------------------------------------------
-
-        painter.setPen(
-            QPen(
-                QColor(
-                    100,
-                    220,
-                    255,
-                    220,
-                ),
-                1,
-            )
-        )
-
-        painter.setBrush(
-            QBrush(
-                QColor(
-                    0,
-                    0,
-                    0,
-                    170,
-                )
-            )
-        )
-
-        painter.drawRect(
-            preview_x,
-            preview_y,
-            preview_w,
-            preview_h,
-        )
-
-        # -----------------------------------------------------
-        # 标题
-        # -----------------------------------------------------
-
-        painter.setFont(
-            QFont(
-                "Consolas",
-                8,
-                QFont.Bold,
-            )
-        )
-
-        painter.setPen(
-            QColor(
-                120,
-                220,
-                255,
-            )
-        )
-
-        painter.drawText(
-            preview_x + 5,
-            preview_y + 12,
-            (
-                "OCR Processed: "
-                f"{debug_field or '-'}"
-            ),
-        )
-
-        # -----------------------------------------------------
-        # 图片
-        # -----------------------------------------------------
-
-        qimage = (
-            self._build_qimage_from_cv(
-                debug_image
-            )
-            if debug_image is not None
-            else None
-        )
-
-        if qimage is not None:
-
-            available_w = (
-                preview_w - 10
-            )
-
-            available_h = (
-                preview_h - 20
-            )
-
-            scaled = qimage.scaled(
-                available_w,
-                available_h,
-                Qt.KeepAspectRatio,
-                Qt.FastTransformation,
-            )
-
-            image_x = (
-                preview_x
-                + (
-                    preview_w
-                    - scaled.width()
-                )
-                // 2
-            )
-
-            image_y = (
-                preview_y
-                + 18
-                + (
-                    available_h
-                    - scaled.height()
-                )
-                // 2
-            )
-
-            painter.drawImage(
-                image_x,
-                image_y,
-                scaled,
-            )
-
-        else:
-
-            painter.setPen(
-                QColor(
-                    120,
-                    120,
-                    120,
-                )
-            )
-
-            painter.drawText(
-                preview_x + 10,
-                preview_y + 55,
-                "No OCR image yet",
-            )
 
         # =====================================================
-        # 数据
+        # Data
         # =====================================================
 
         painter.setFont(
@@ -1434,13 +1868,22 @@ class TransparentOverlay(QWidget):
                 ]
             )
 
-            if state.direction_state == 1:
+            if (
+                state.direction_state
+                == 1
+            ):
+
                 direction = "FWD"
 
-            elif state.direction_state == -1:
+            elif (
+                state.direction_state
+                == -1
+            ):
+
                 direction = "REV"
 
             else:
+
                 direction = "STOP"
 
             current_speed = (
@@ -1513,9 +1956,10 @@ class TransparentOverlay(QWidget):
             ) in enumerate(lines):
 
                 row_y = (
-                    panel_y
-                    + 115
-                    + index * 29
+                    PANEL_Y
+                    + DATA_START_Y
+                    + index
+                    * DATA_ROW_HEIGHT
                 )
 
                 painter.setPen(
@@ -1527,7 +1971,7 @@ class TransparentOverlay(QWidget):
                 )
 
                 painter.drawText(
-                    panel_x + 18,
+                    PANEL_X + 18,
                     row_y,
                     label,
                 )
@@ -1541,7 +1985,7 @@ class TransparentOverlay(QWidget):
                 )
 
                 painter.drawText(
-                    panel_x + 160,
+                    PANEL_X + 160,
                     row_y,
                     value,
                 )
@@ -1557,8 +2001,8 @@ class TransparentOverlay(QWidget):
             )
 
             painter.drawText(
-                panel_x + 18,
-                panel_y + 125,
+                PANEL_X + 18,
+                PANEL_Y + DATA_START_Y,
                 "Target not locked or out of view.",
             )
 

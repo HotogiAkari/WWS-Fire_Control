@@ -1,13 +1,14 @@
-# recognition/vision_manager.py
-
 import os
 import sys
 import time
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
-import cv2
 import numpy as np
 
+
+# ============================================================
+# Project Path
+# ============================================================
 
 PROJECT_ROOT = os.path.dirname(
     os.path.dirname(
@@ -19,6 +20,120 @@ if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
 
+# ============================================================
+# Vision 调参区
+# ============================================================
+
+
+# ============================================================
+# 1. 固定 HUD ROI
+#
+# 格式：
+#
+#     (相对于屏幕中心的 x,
+#      相对于屏幕中心的 y,
+#      width,
+#      height)
+#
+# 当前由于 WoWs HUD 位于屏幕中央，
+# 使用相对中心坐标。
+# ============================================================
+
+FIXED_HUD_REGIONS = {
+
+    "flight_time": (
+        -130,
+        23,
+        75,
+        25,
+    ),
+
+    "aim_distance": (
+        57,
+        23,
+        90,
+        25,
+    ),
+
+    "ship_name": (
+        -300,
+        83,
+        270,
+        30,
+    ),
+
+    "max_speed": (
+        -122,
+        115,
+        90,
+        26,
+    ),
+}
+
+
+# ============================================================
+# 2. 是否使用屏幕中心相对坐标
+# ============================================================
+
+FIXED_HUD_RELATIVE_TO_CENTER = True
+
+
+# ============================================================
+# 3. 目标切换距离
+#
+# 当前 anchor 与上一帧 anchor 的距离超过此值，
+# 认为可能发生目标切换。
+#
+# 调大：
+#     减少误触发
+#
+# 调小：
+#     更容易刷新静态舰船数据
+# ============================================================
+
+TARGET_SWITCH_DISTANCE = 180.0
+
+
+# ============================================================
+# 4. OCR 配置
+#
+# 这里是 VisionManager 对 OCRParser 的正式运行配置。
+#
+# 修改 OCR 参数时优先修改这里。
+# ============================================================
+
+OCR_CONFIG = {
+
+    # 数字放大倍率
+    "numeric_scale": 2.0,
+
+    # 小号普通文字
+    "normal_scale_small": 2.0,
+
+    # 大号普通文字
+    "normal_scale_large": 1.5,
+
+    # 判断普通文字大小的 ROI 高度阈值
+    "normal_text_height_threshold": 30,
+
+    # 最低亮度
+    "binary_min_value": 150,
+
+    # 最大允许饱和度
+    "binary_max_saturation": 80,
+
+    # OCR 输入边框
+    "border_top": 8,
+    "border_bottom": 8,
+    "border_left": 12,
+    "border_right": 12,
+}
+
+
+# ============================================================
+# Imports
+# ============================================================
+
 from common.config_loader import ConfigLoader
 from common.data_models import TargetState
 
@@ -27,21 +142,22 @@ from recognition.indicator_parser import IndicatorParser
 from recognition.ocr_parser import OCRParser
 
 
+# ============================================================
+# VisionManager
+# ============================================================
+
 class VisionManager:
     """
-    顶层视觉调度器。
+    顶层视觉统合器。
 
-    目标：
+    负责：
 
-        native_overlay.py
-            ↓
-        VisionManager
-            ├── Target / Indicator
-            ├── OCR
-            ├── MiniMap（以后）
-            └── Ballistics（以后）
+        - 获取基础视觉结果
+        - 调用 OCR
+        - 调用扩展视觉模块
+        - 统一输出
 
-    UI 不直接关心底层算法实现。
+    不负责具体算法。
     """
 
     def __init__(
@@ -52,42 +168,53 @@ class VisionManager:
         self.config = config
 
         # =====================================================
-        # 当前模块
+        # Core
         # =====================================================
 
-        self.capturer = ScreenCapturer()
+        self.capturer = (
+            ScreenCapturer()
+        )
 
-        self.indicators = IndicatorParser()
+        self.indicators = (
+            IndicatorParser()
+        )
 
-        self.ocr = OCRParser()
+        self.ocr = (
+            OCRParser(
+                **OCR_CONFIG
+            )
+        )
 
         # =====================================================
-        # 未来模块
-        # =====================================================
-
+        # Extension Modules
+        #
         # 以后：
         #
-        # from recognition.minimap_parser import MiniMapParser
-        # self.minimap = MiniMapParser(...)
-        #
-        self.minimap = None
+        # self.register_module(
+        #     "minimap",
+        #     MiniMapParser(),
+        # )
+        # =====================================================
 
-        # 以后：
-        #
-        # self.ballistics = BallisticsCalculator(...)
-        #
-        self.ballistics = None
+        self.modules: Dict[
+            str,
+            Any,
+        ] = {}
 
         # =====================================================
-        # 屏幕
+        # Screen
         # =====================================================
 
         self.sw = int(
-            self.capturer.monitor["width"]
+            self.capturer.monitor[
+                "width"
+            ]
         )
 
         self.sh = int(
-            self.capturer.monitor["height"]
+            self.capturer.monitor[
+                "height"
+            ]
         )
 
         self.cx = self.sw // 2
@@ -97,60 +224,186 @@ class VisionManager:
         # 固定 HUD
         # =====================================================
 
-        self.fixed_hud_regions = {
+        if FIXED_HUD_RELATIVE_TO_CENTER:
 
-            "flight_time": (
-                self.cx - 130,
-                self.cy + 23,
-                75,
-                25,
-            ),
+            self.fixed_hud_regions = {
 
-            "aim_distance": (
-                self.cx + 57,
-                self.cy + 23,
-                90,
-                25,
-            ),
+                name: (
 
-            "ship_name": (
-                self.cx - 300,
-                self.cy + 83,
-                270,
-                30,
-            ),
+                    self.cx + rect[0],
 
-            "max_speed": (
-                self.cx - 122,
-                self.cy + 115,
-                90,
-                26,
-            ),
-        }
+                    self.cy + rect[1],
+
+                    rect[2],
+
+                    rect[3],
+                )
+
+                for (
+                    name,
+                    rect,
+                ) in FIXED_HUD_REGIONS.items()
+            }
+
+        else:
+
+            self.fixed_hud_regions = dict(
+                FIXED_HUD_REGIONS
+            )
 
         # =====================================================
-        # 目标切换距离
+        # Target switch
         # =====================================================
 
-        self.TARGET_SWITCH_DISTANCE = 180.0
+        self.TARGET_SWITCH_DISTANCE = (
+            TARGET_SWITCH_DISTANCE
+        )
 
         # =====================================================
-        # 当前目标
+        # Current anchor
         # =====================================================
 
         self.current_anchor = None
 
     # =========================================================
-    # 固定 HUD
+    # Register module
     # =========================================================
 
-    def get_fixed_regions(self) -> Dict:
+    def register_module(
+        self,
+        name: str,
+        module: Any,
+    ):
+
+        if not name:
+
+            raise ValueError(
+                "模块名称不能为空"
+            )
+
+        if module is None:
+
+            raise ValueError(
+                f"模块 {name} 不能为 None"
+            )
+
+        process = getattr(
+            module,
+            "process",
+            None,
+        )
+
+        if not callable(process):
+
+            raise TypeError(
+                f"模块 {name} "
+                "必须提供 process() 方法"
+            )
+
+        self.modules[name] = module
+
+    # =========================================================
+    # Unregister
+    # =========================================================
+
+    def unregister_module(
+        self,
+        name: str,
+    ):
+
+        module = self.modules.pop(
+            name,
+            None,
+        )
+
+        if module is None:
+            return
+
+        close = getattr(
+            module,
+            "close",
+            None,
+        )
+
+        if callable(close):
+
+            try:
+
+                close()
+
+            except Exception:
+
+                pass
+
+    # =========================================================
+    # Get module
+    # =========================================================
+
+    def get_module(
+        self,
+        name: str,
+    ) -> Optional[Any]:
+
+        return self.modules.get(
+            name
+        )
+
+    # =========================================================
+    # Run extension modules
+    # =========================================================
+
+    def _run_registered_modules(
+        self,
+        frame_bgr: np.ndarray,
+        frame_hsv: np.ndarray,
+        context: Dict,
+    ) -> Dict:
+
+        outputs = {}
+
+        for (
+            name,
+            module,
+        ) in self.modules.items():
+
+            try:
+
+                outputs[name] = (
+                    module.process(
+                        frame_bgr=frame_bgr,
+                        frame_hsv=frame_hsv,
+                        context=context,
+                    )
+                )
+
+            except Exception as exc:
+
+                print(
+                    f"[Vision] "
+                    f"模块 {name} 执行失败: "
+                    f"{exc}"
+                )
+
+                outputs[name] = {
+
+                    "error":
+                        str(exc),
+                }
+
+        return outputs
+
+    # =========================================================
+    # Fixed Regions
+    # =========================================================
+
+    def get_fixed_regions(
+        self,
+    ) -> Dict:
 
         regions = dict(
             self.fixed_hud_regions
         )
 
-        # 敌我角度也是固定 HUD
         angle_regions = (
             self.indicators
             .get_dynamic_ocr_rois(
@@ -175,7 +428,7 @@ class VisionManager:
         return regions
 
     # =========================================================
-    # 动态区域
+    # Dynamic Regions
     # =========================================================
 
     def get_dynamic_regions(
@@ -193,7 +446,7 @@ class VisionManager:
         )
 
     # =========================================================
-    # OCR 区域
+    # OCR Regions
     # =========================================================
 
     def get_ocr_regions(
@@ -218,10 +471,12 @@ class VisionManager:
         return regions
 
     # =========================================================
-    # OCR 几何参数
+    # OCR Geometry
     # =========================================================
 
-    def get_ocr_geometry(self) -> Dict:
+    def get_ocr_geometry(
+        self,
+    ) -> Dict:
 
         return {
 
@@ -239,7 +494,7 @@ class VisionManager:
         }
 
     # =========================================================
-    # Debug regions
+    # Debug Regions
     # =========================================================
 
     def get_debug_regions(
@@ -249,42 +504,40 @@ class VisionManager:
 
         regions = {}
 
-        # -----------------------------------------------------
-        # 固定 HUD
-        # -----------------------------------------------------
-
-        for name, rect in (
-            self.get_fixed_regions()
-        ).items():
+        for (
+            name,
+            rect,
+        ) in self.get_fixed_regions().items():
 
             regions[name] = {
-                "rect": rect,
-                "type": "fixed",
-            }
 
-        # -----------------------------------------------------
-        # 动态 ROI
-        # -----------------------------------------------------
+                "rect":
+                    rect,
+
+                "type":
+                    "fixed",
+            }
 
         if anchor is not None:
 
-            for name, rect in (
-                self.get_dynamic_regions(
-                    anchor
-                )
+            for (
+                name,
+                rect,
+            ) in self.get_dynamic_regions(
+                anchor
             ).items():
 
                 if name in regions:
                     continue
 
                 regions[name] = {
-                    "rect": rect,
-                    "type": "dynamic",
-                }
 
-        # -----------------------------------------------------
-        # 目标血条
-        # -----------------------------------------------------
+                    "rect":
+                        rect,
+
+                    "type":
+                        "dynamic",
+                }
 
         if anchor is not None:
 
@@ -300,152 +553,264 @@ class VisionManager:
             regions[
                 "target_hp_bar"
             ] = {
+
                 "rect": (
                     hx,
                     hy,
                     hw,
                     hh,
                 ),
-                "type": "target",
+
+                "type":
+                    "target",
             }
 
         return regions
 
     # =========================================================
-    # 目标切换通知
+    # UI Exclusion
     # =========================================================
 
-    def notify_target_switch(self):
+    def get_ui_exclusion_regions(
+        self,
+    ):
+
+        return (
+            self.indicators
+            .get_ui_exclusion_regions()
+        )
+
+    # =========================================================
+    # Target switch
+    # =========================================================
+
+    def notify_target_switch(
+        self,
+    ):
 
         self.ocr.force_static_refresh()
 
     # =========================================================
-    # 处理一帧
+    # Process Frame
     # =========================================================
 
     def process_frame(
         self,
         frame_bgr: np.ndarray,
         frame_hsv: np.ndarray,
-        anchor,
+        anchor=None,
+        previous_anchor=None,
     ) -> Dict:
 
-        self.current_anchor = anchor
-
         # =====================================================
-        # OCR
+        # 1. Indicator
         # =====================================================
 
-        self.ocr.update(
-            frame_bgr=frame_bgr,
-            roi_map=self.get_ocr_regions(
-                anchor
-            ),
-            geometry=self.get_ocr_geometry(),
-            locked=(
-                anchor is not None
-            ),
+        indicator_result = (
+            self.indicators.process(
+                frame_bgr=frame_bgr,
+                frame_hsv=frame_hsv,
+                previous_anchor=previous_anchor,
+                screen_cx=self.cx,
+                screen_cy=self.cy,
+            )
+        )
+
+        detected_anchor = (
+            indicator_result[
+                "anchor"
+            ]
         )
 
         # =====================================================
-        # MiniMap
+        # 如果 Worker 已经检测好 anchor，
+        # 沿用 Worker 的结果。
         # =====================================================
 
-        minimap_result = None
+        if anchor is not None:
 
-        if self.minimap is not None:
+            detected_anchor = anchor
 
-            minimap_result = (
-                self.minimap.process(
-                    frame_bgr
-                )
+        self.current_anchor = (
+            detected_anchor
+        )
+
+        # =====================================================
+        # 2. OCR
+        # =====================================================
+
+        ocr_regions = (
+            self.get_ocr_regions(
+                detected_anchor
             )
+        )
 
-        # =====================================================
-        # 没锁定
-        # =====================================================
-
-        if anchor is None:
-
-            data = (
-                self.ocr.get_cache()
+        ocr_cache = (
+            self.ocr.process(
+                frame_bgr=frame_bgr,
+                roi_map=ocr_regions,
+                geometry=self.get_ocr_geometry(),
+                locked=(
+                    detected_anchor is not None
+                ),
             )
+        )
+
+        # =====================================================
+        # 3. Context
+        # =====================================================
+
+        context = {
+
+            "timestamp":
+                time.time(),
+
+            "screen": {
+
+                "width":
+                    self.sw,
+
+                "height":
+                    self.sh,
+
+                "cx":
+                    self.cx,
+
+                "cy":
+                    self.cy,
+            },
+
+            "anchor":
+                detected_anchor,
+
+            "indicator":
+                indicator_result,
+
+            "ocr":
+                ocr_cache,
+
+            "ocr_regions":
+                ocr_regions,
+
+            "ui_exclusion_regions":
+                self.get_ui_exclusion_regions(),
+        }
+
+        # =====================================================
+        # 4. Extension Modules
+        # =====================================================
+
+        module_outputs = (
+            self._run_registered_modules(
+                frame_bgr=frame_bgr,
+                frame_hsv=frame_hsv,
+                context=context,
+            )
+        )
+
+        # =====================================================
+        # 5. 未锁定
+        # =====================================================
+
+        if detected_anchor is None:
 
             return {
-                "state": None,
+
+                "timestamp":
+                    time.time(),
+
+                "locked":
+                    False,
+
+                "state":
+                    None,
 
                 "ship_name":
-                    data["ship_name"],
+                    ocr_cache[
+                        "ship_name"
+                    ],
 
                 "max_speed":
-                    data["max_speed"],
+                    ocr_cache[
+                        "max_speed"
+                    ],
 
-                "hud_raw": {},
+                "hud_raw":
+                    {},
 
-                "target": None,
+                "target":
+                    None,
 
-                "minimap":
-                    minimap_result,
+                "indicator":
+                    indicator_result,
+
+                "ocr":
+                    ocr_cache,
+
+                "modules":
+                    module_outputs,
             }
 
         # =====================================================
-        # 航速
+        # 6. Cache 数据
         # =====================================================
 
-        (
-            speed_fraction,
-            direction,
-            sample_pts,
-        ) = (
-            self.indicators
-            .sample_speed_ring(
-                frame_hsv,
-                anchor[0],
-                anchor[1],
-            )
+        speed_fraction = float(
+            indicator_result[
+                "speed_fraction"
+            ]
         )
 
-        # =====================================================
-        # OCR
-        # =====================================================
-
-        data = (
-            self.ocr.get_cache()
+        direction = int(
+            indicator_result[
+                "direction"
+            ]
         )
 
         flight_time = float(
-            data["flight_time"]
+            ocr_cache[
+                "flight_time"
+            ]
         )
 
         aim_distance = float(
-            data["aim_distance"]
+            ocr_cache[
+                "aim_distance"
+            ]
         )
 
         enemy_distance = float(
-            data["enemy_distance"]
+            ocr_cache[
+                "enemy_distance"
+            ]
         )
 
         enemy_angle = float(
-            data["enemy_angle"]
+            ocr_cache[
+                "enemy_angle"
+            ]
         )
 
         our_angle = float(
-            data["our_angle"]
+            ocr_cache[
+                "our_angle"
+            ]
         )
 
         ship_name = str(
-            data["ship_name"]
+            ocr_cache[
+                "ship_name"
+            ]
         )
 
         max_speed = float(
-            data["max_speed"]
+            ocr_cache[
+                "max_speed"
+            ]
         )
 
         # =====================================================
-        # 格式化
-        #
-        # 单位完全由程序添加。
-        # OCR 不负责单位。
+        # 7. HUD Raw
         # =====================================================
 
         hud_raw = {
@@ -473,37 +838,48 @@ class VisionManager:
         }
 
         # =====================================================
-        # TargetState
+        # 8. TargetState
         # =====================================================
 
         state = TargetState(
 
-            timestamp=time.time(),
+            timestamp=
+                time.time(),
 
-            # 动态敌舰距离
-            distance=enemy_distance,
+            distance=
+                enemy_distance,
 
-            # 固定 HUD 中的落点距离
-            aiming_distance=aim_distance,
+            aiming_distance=
+                aim_distance,
 
-            flight_time=flight_time,
+            flight_time=
+                flight_time,
 
-            relative_angle=enemy_angle,
+            relative_angle=
+                enemy_angle,
 
             minimap_x=0.0,
 
             minimap_y=0.0,
 
-            speed_fraction=speed_fraction,
+            speed_fraction=
+                speed_fraction,
 
-            direction_state=direction,
+            direction_state=
+                direction,
         )
 
         # =====================================================
-        # 返回统一结构
+        # 9. Unified result
         # =====================================================
 
         return {
+
+            "timestamp":
+                time.time(),
+
+            "locked":
+                True,
 
             "state":
                 state,
@@ -520,10 +896,12 @@ class VisionManager:
             "target": {
 
                 "anchor":
-                    anchor,
+                    detected_anchor,
 
                 "sample_pts":
-                    sample_pts,
+                    indicator_result[
+                        "sample_pts"
+                    ],
 
                 "speed_fraction":
                     speed_fraction,
@@ -532,8 +910,14 @@ class VisionManager:
                     direction,
             },
 
-            "minimap":
-                minimap_result,
+            "indicator":
+                indicator_result,
+
+            "ocr":
+                ocr_cache,
+
+            "modules":
+                module_outputs,
         }
 
     # =========================================================
@@ -543,21 +927,34 @@ class VisionManager:
     def close(self):
 
         if self.ocr is not None:
+
             self.ocr.close()
 
         if self.capturer is not None:
+
             self.capturer.close()
 
-        if self.minimap is not None:
+        for (
+            name,
+            module,
+        ) in list(
+            self.modules.items()
+        ):
 
-            try:
-                self.minimap.close()
-            except Exception:
-                pass
+            close = getattr(
+                module,
+                "close",
+                None,
+            )
 
-        if self.ballistics is not None:
+            if callable(close):
 
-            try:
-                self.ballistics.close()
-            except Exception:
-                pass
+                try:
+
+                    close()
+
+                except Exception:
+
+                    pass
+
+        self.modules.clear()
